@@ -1,114 +1,161 @@
-# Pulse Explorer (OmniView)
+<div align="center">
 
-> One application. Multiple file formats. One consistent viewing experience.
+<img src="docs/assets/logo.png" alt="Pulse Explorer logo" width="140" />
 
-Pulse Explorer is a privacy-first, local-first universal viewer for documents, spreadsheets, presentations, code, media, eBooks, archives and raw binaries. It runs in the browser and as a native desktop app (Tauri v2), with an optional containerized conversion pipeline for high-fidelity rendering. Internally the packages are namespaced `@omniview/*`.
+# Pulse Explorer
 
-## Features
+**One app. Every file format. One consistent viewing experience.**
 
-- **Broad format coverage**
-  - Documents: `.pdf`, `.docx`, `.doc`, `.odt`, `.rtf`
-  - Presentations: `.pptx`, `.ppt`, `.odp`
-  - Spreadsheets: `.xlsx`, `.xls`, `.ods`, `.csv`, `.tsv`
-  - Images and vector: `.png`, `.jpg`, `.webp`, `.gif`, `.bmp`, `.ico`, `.svg` (visual and XML source views)
-  - eBooks: `.epub`, `.fb2`
-  - Code and config: `.ts`, `.js`, `.py`, `.go`, `.rs`, `.json`, `.yaml`, `.toml`, `.xml`, `.md`, `.html`, `.css`, `.sql`, `.sh`, `.ini`, `.log`, plus a masked `.env` inspector
-  - Audio and video: `.mp4`, `.webm`, `.ogg`, `.mp3`, `.wav`, `.flac`, `.aac`
-  - Archives: `.zip`, `.tar`, `.gz`, `.tgz` with a virtual tree and recursive inner-file preview
-  - Fallback: hex and ASCII inspector for unknown or corrupted files
-- **Local-first security**
-  - Magic-byte detection instead of trusting file extensions
-  - DOMPurify sanitization for SVG, HTML, Markdown, EPUB and DOCX output
-  - Office macros (`vbaProject.bin`) are never executed
-  - Zip-bomb ratio ceiling (100:1) and zip-slip path traversal protection
-  - `.env` and secret files are blocked from remote upload
-- **Annotations and session continuity**: zoom-invariant normalized (`0..1`) coordinates, cell references, line ranges and media timecodes, stored in IndexedDB and optionally synced to PostgreSQL.
+Privacy-first, local-first universal viewer for documents, spreadsheets, slides, code, media, eBooks, archives and raw binaries.
 
-## Repository layout
+<br />
 
-```text
-apps/
-  web/              React + Tailwind + Zustand shell (Vite)
-  api/              Fastify REST API + Prisma
-  worker/           Sandboxed LibreOffice / FFmpeg conversion worker
-  desktop/          Tauri v2 desktop shell
-packages/
-  shared-types/     Domain interfaces and DTOs
-  utilities/        Magic bytes, sanitizers, zip guard
-  viewer-core/      Adapter registry and session store
-  viewer-adapters/  Per-format rendering engines
-  ui/  config/      Shared UI and config
-infrastructure/
-  compose.yaml      PostgreSQL 16, Redis 7, MinIO, API, worker
-  docker/           Worker Dockerfile
-docs/               Architecture, security and roadmap specs
-tests/              Integration (Vitest) and e2e (Playwright) tests
-```
+![Node](https://img.shields.io/badge/node-%E2%89%A520-111111?style=flat-square&logo=nodedotjs&logoColor=white)
+![pnpm](https://img.shields.io/badge/pnpm-11-111111?style=flat-square&logo=pnpm&logoColor=white)
+![TypeScript](https://img.shields.io/badge/TypeScript-5.7-111111?style=flat-square&logo=typescript&logoColor=white)
+![React](https://img.shields.io/badge/React-Vite-111111?style=flat-square&logo=react&logoColor=white)
+![Tauri](https://img.shields.io/badge/Tauri-v2-111111?style=flat-square&logo=tauri&logoColor=white)
+![Local first](https://img.shields.io/badge/local--first-no%20uploads-111111?style=flat-square)
 
-## Getting started
+[Quick start](#-quick-start) · [Features](#-features) · [Architecture](#-architecture) · [Security](#-security) · [Scripts](#-scripts) · [Docs](#-documentation)
 
-### Prerequisites
+</div>
+
+<br />
+
+## ✦ Overview
+
+Pulse Explorer (codename **OmniView**, hence the `@omniview/*` package scope) opens almost anything you throw at it, entirely on your machine. Drop in a PDF, a spreadsheet, a nested ZIP or an unknown binary and get a fast, consistent viewer with annotations that survive zoom and reload.
+
+It runs in the browser and as a native desktop app (Tauri v2). An optional containerized worker adds high-fidelity conversion through LibreOffice and FFmpeg.
+
+## ✦ Features
+
+| | Category | Formats |
+| :-: | --- | --- |
+| 📄 | **Documents** | `pdf` `docx` `doc` `odt` `rtf` |
+| 📊 | **Spreadsheets** | `xlsx` `xls` `ods` `csv` `tsv` |
+| 🎞️ | **Presentations** | `pptx` `ppt` `odp` |
+| 🖼️ | **Images & vector** | `png` `jpg` `webp` `gif` `bmp` `ico` `svg` (visual + XML source) |
+| 📚 | **eBooks** | `epub` `fb2` |
+| 💻 | **Code & config** | `ts` `js` `py` `go` `rs` `json` `yaml` `toml` `xml` `md` `html` `css` `sql` `sh` `ini` `log`, masked `.env` inspector |
+| 🎧 | **Audio & video** | `mp4` `webm` `ogg` `mp3` `wav` `flac` `aac` with waveform and timecode markers |
+| 🗜️ | **Archives** | `zip` `tar` `gz` `tgz` with a virtual tree and recursive inner-file preview |
+| 🔍 | **Anything else** | Hex and ASCII inspector with offsets and a data inspector |
+
+**Also included**
+
+- Annotations stored as zoom-invariant normalized (`0..1`) coordinates, cell references, line ranges and media timecodes
+- Session continuity in IndexedDB, with optional sync to PostgreSQL
+- Built-in sample gallery so you can try every viewer without any files
+
+## ✦ Quick start
+
+**Prerequisites**
 
 - [Node.js](https://nodejs.org) 20 or newer
-- [pnpm](https://pnpm.io) 11 (`corepack enable` will pick up the pinned version)
-- Optional, for the full stack: Docker and Docker Compose
-- Optional, for the native desktop build: the [Tauri prerequisites](https://tauri.app/start/prerequisites/) (Rust toolchain and platform build tools)
-
-### Install
+- [pnpm](https://pnpm.io) 11 (`corepack enable` picks up the pinned version)
+- *Optional:* Docker for the full stack, [Tauri prerequisites](https://tauri.app/start/prerequisites/) for native desktop builds
 
 ```bash
 git clone https://github.com/itsnothyun/Pulse-Explorer.git
 cd Pulse-Explorer
 pnpm install
-```
-
-### Run the web app (local-first mode)
-
-```bash
 pnpm dev
 ```
 
-Open http://localhost:5173. The app includes a sample file gallery and accepts any local file by drag and drop.
+Open **http://localhost:5173**, then drag any file onto the window or pick one from the sample gallery.
 
-### Run the desktop app
+<details>
+<summary><b>Desktop app</b></summary>
 
 ```bash
-pnpm desktop          # lightweight launcher (on Windows you can also run OmniView-Desktop.cmd)
+pnpm desktop          # lightweight launcher (Windows: double-click OmniView-Desktop.cmd)
 pnpm desktop:tauri    # native Tauri dev window (requires Rust)
-pnpm desktop:build    # production desktop bundle
+pnpm desktop:build    # production bundle
 ```
 
-See [apps/desktop/OFFLINE_SUPPORT_MATRIX.md](apps/desktop/OFFLINE_SUPPORT_MATRIX.md) for what works offline.
+See [OFFLINE_SUPPORT_MATRIX.md](apps/desktop/OFFLINE_SUPPORT_MATRIX.md) for what works offline.
+</details>
 
-### Optional: API, worker and backing services
+<details>
+<summary><b>API, worker and backing services (optional)</b></summary>
 
 ```bash
 docker compose -f infrastructure/compose.yaml up --build -d
 ```
 
-This starts PostgreSQL (5432), Redis (6379), MinIO (9000/9001), the API (4000) and the hardened worker. Ports can be overridden with `POSTGRES_PORT`, `REDIS_PORT`, `MINIO_API_PORT`, `MINIO_CONSOLE_PORT` and `API_PORT`. To run the services individually: `pnpm dev:api`, `pnpm dev:worker`, or `pnpm dev:all` for everything.
+| Service | Port | Override |
+| --- | --- | --- |
+| PostgreSQL 16 | 5432 | `POSTGRES_PORT` |
+| Redis 7 | 6379 | `REDIS_PORT` |
+| MinIO API / console | 9000 / 9001 | `MINIO_API_PORT` / `MINIO_CONSOLE_PORT` |
+| Fastify API | 4000 | `API_PORT` |
 
-## Scripts
+Run services individually with `pnpm dev:api` and `pnpm dev:worker`, or everything at once with `pnpm dev:all`.
+</details>
 
-| Command | What it does |
+## ✦ Architecture
+
+```text
+apps/
+├── web/               React + Tailwind + Zustand shell (Vite)
+├── api/               Fastify REST API + Prisma
+├── worker/            Sandboxed LibreOffice / FFmpeg conversion worker
+└── desktop/           Tauri v2 desktop shell
+packages/
+├── shared-types/      Domain interfaces and DTOs
+├── utilities/         Magic bytes, sanitizers, zip guard
+├── viewer-core/       Adapter registry and session store
+├── viewer-adapters/   Per-format rendering engines
+├── ui/                Shared UI components
+└── config/            Shared configuration
+infrastructure/        Docker Compose and worker Dockerfile
+docs/                  Architecture, security and roadmap specs
+tests/                 Integration (Vitest) and e2e (Playwright)
+```
+
+Each format is a `ViewerAdapter` registered in `viewer-core`, so adding a format means adding one adapter. See the [rendering engine strategy](docs/03_RENDERING_ENGINE_STRATEGY.md) for the contract.
+
+## ✦ Security
+
+Files are treated as hostile by default.
+
+- **Magic-byte detection** rather than trusting extensions
+- **DOMPurify sanitization** for SVG, HTML, Markdown, EPUB and DOCX output
+- **No macro execution**: Office VBA (`vbaProject.bin`) is never run
+- **Zip-bomb ceiling** of 100:1 and **zip-slip** path traversal protection
+- **Local-only guard**: `.env` and secret files are blocked from remote upload
+- **Sandboxed worker** running as non-root in a hardened container
+
+Full threat model: [05 Security architecture](docs/05_SECURITY_ARCHITECTURE.md).
+
+## ✦ Scripts
+
+| Command | Description |
 | --- | --- |
 | `pnpm dev` | Web app dev server |
 | `pnpm dev:all` | All apps via Turborepo |
 | `pnpm build` | Build every package and app |
 | `pnpm typecheck` | Type-check the workspace |
-| `pnpm test` | Run Vitest tests |
+| `pnpm test` | Run all Vitest tests |
 | `pnpm test:unit` | Integration tests only |
 | `pnpm fixtures:generate` | Generate sample files in `tests/fixtures/generated` |
-| `pnpm test:e2e` | Playwright end-to-end tests (generate fixtures first) |
+| `pnpm test:e2e` | Playwright end-to-end tests |
 
-First-time e2e run: `pnpm exec playwright install`, then `pnpm fixtures:generate`, then `pnpm test:e2e`.
+First e2e run: `pnpm exec playwright install && pnpm fixtures:generate && pnpm test:e2e`
 
-## Documentation
+## ✦ Documentation
 
-- [Project overview](docs/00_PROJECT_OVERVIEW.md)
-- [System architecture](docs/01_SYSTEM_ARCHITECTURE.md)
-- [Tech stack and licenses](docs/02_TECH_STACK_AND_LICENSES.md)
-- [Rendering engine strategy](docs/03_RENDERING_ENGINE_STRATEGY.md)
-- [Database design](docs/04_DATABASE_DESIGN.md)
-- [Security architecture](docs/05_SECURITY_ARCHITECTURE.md)
-- [Implementation roadmap](docs/06_IMPLEMENTATION_ROADMAP.md)
+| | |
+| --- | --- |
+| [00 Project overview](docs/00_PROJECT_OVERVIEW.md) | [04 Database design](docs/04_DATABASE_DESIGN.md) |
+| [01 System architecture](docs/01_SYSTEM_ARCHITECTURE.md) | [05 Security architecture](docs/05_SECURITY_ARCHITECTURE.md) |
+| [02 Tech stack and licenses](docs/02_TECH_STACK_AND_LICENSES.md) | [06 Implementation roadmap](docs/06_IMPLEMENTATION_ROADMAP.md) |
+| [03 Rendering engine strategy](docs/03_RENDERING_ENGINE_STRATEGY.md) | [Desktop offline matrix](apps/desktop/OFFLINE_SUPPORT_MATRIX.md) |
+
+<br />
+
+<div align="center">
+<sub>Built with care for people who open too many file types.</sub>
+</div>
