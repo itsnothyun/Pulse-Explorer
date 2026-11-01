@@ -90,7 +90,9 @@ Open **http://localhost:5173**, then drag any file onto the window or pick one f
 pnpm desktop          # lightweight launcher (Windows: double-click OmniView-Desktop.cmd)
 pnpm desktop:tauri    # native Tauri dev window (requires Rust)
 pnpm desktop:build    # production bundle
-```
+```n
+**Windows installer.** `pnpm desktop:build` compiles the web app and the Rust shell, then writes an NSIS installer to `apps/desktop/src-tauri/target/release/bundle/nsis/` (for example `Pulse Explorer_1.0.0_x64-setup.exe`). The first build downloads and compiles Rust crates and can take several minutes. The installer registers Pulse Explorer as an option in *Open with* for the supported file types. It isn't code-signed yet, so SmartScreen may ask you to confirm.
+
 
 See [OFFLINE_SUPPORT_MATRIX.md](apps/desktop/OFFLINE_SUPPORT_MATRIX.md) for what works offline.
 </details>
@@ -134,19 +136,42 @@ tests/                 Integration (Vitest) and e2e (Playwright)
 
 Each format is a `ViewerAdapter` registered in `viewer-core`, so adding a format means adding one adapter. See the [rendering engine strategy](docs/03_RENDERING_ENGINE_STRATEGY.md) for the contract.
 
+## ✦ Tech stack
+
+| Layer | Built with |
+| --- | --- |
+| UI | React 19, Tailwind CSS 4, Zustand, Vite |
+| Desktop | Tauri v2 (Rust), single-instance, native file associations, Quick View window |
+| Rendering | pdf.js, SheetJS, JSZip, DOMPurify, marked |
+| Conversion (on-device) | FFmpeg WebAssembly, pdf-lib, fflate, yaml, Canvas API |
+| Optional backend | Fastify, Prisma, PostgreSQL, Redis, MinIO, LibreOffice worker |
+| Tooling | pnpm workspaces, Turborepo, TypeScript, Vitest, Playwright |
+
+## ✦ Privacy
+
+- Files you open stay on your device. The web app and the desktop app work without an account and without network access to any Pulse service.
+- Conversion and compression run locally. FFmpeg ships inside the app as WebAssembly; no CDN or server is contacted.
+- The workspace (file bytes, annotations, history) is stored in your browser's IndexedDB. It is **not encrypted**, so use *Settings → Files → Clear workspace* on a shared computer.
+- The optional API and cloud mode are off by default. Nothing syncs unless you switch the workspace to Cloud and run the backend yourself.
+
 ## ✦ Security
 
 Files are treated as hostile by default.
 
-- **Magic-byte detection** rather than trusting extensions
-- **DOMPurify sanitization** for SVG, HTML, Markdown, EPUB and DOCX output
-- **No macro execution**: Office VBA (`vbaProject.bin`) is never run
-- **Zip-bomb ceiling** of 100:1 and **zip-slip** path traversal protection
-- **Local-only guard**: `.env` and secret files are blocked from remote upload
-- **Sandboxed worker** running as non-root in a hardened container
+| Threat | What Pulse Explorer does |
+| --- | --- |
+| Spoofed type (`.png` that is really an `.exe`) | Detects the real type from magic bytes, never the extension |
+| Script in SVG, HTML, Markdown, EPUB, DOCX | DOMPurify sanitization before anything renders |
+| Office macros and DDE formulas | Never executed; a notice is shown |
+| Zip bombs and path traversal | 100:1 ratio ceiling, 1 GB expansion cap, and `..`, absolute and drive-letter paths rejected for zip **and** tar |
+| Secrets in `.env` files | Masked in the viewer and blocked from remote upload |
+| Malicious URLs on import | SSRF guard resolves DNS first and blocks loopback, link-local, private ranges and internal service names |
+| Compromised conversion | Conversions run in the browser sandbox; the optional worker runs non-root with a read-only filesystem, all capabilities dropped and an isolated network |
+| Desktop attack surface | Least-privilege Tauri capabilities and a strict CSP: no remote scripts, no frames, no plugins |
 
-Full threat model: [05 Security architecture](docs/05_SECURITY_ARCHITECTURE.md).
+Converting or compressing never overwrites the original; results are always saved as new files.
 
+Found a vulnerability? Please report it privately. See [SECURITY.md](SECURITY.md) for how, what's in scope, and the known limitations. The full threat model is in [05 Security architecture](docs/05_SECURITY_ARCHITECTURE.md).
 ## ✦ Scripts
 
 | Command | Description |
@@ -162,6 +187,30 @@ Full threat model: [05 Security architecture](docs/05_SECURITY_ARCHITECTURE.md).
 
 First e2e run: `pnpm exec playwright install && pnpm fixtures:generate && pnpm test:e2e`
 
+## ✦ Testing
+
+```bash
+pnpm typecheck                  # all workspaces
+pnpm test                       # unit and integration (Vitest)
+pnpm exec playwright test       # end-to-end in Chromium, including the hold-to-convert flows
+```
+
+The converter tests cover format round-trips, archive safety (zip-slip, long tar paths), and refusing to save a "compressed" file that isn't smaller.
+
+## ✦ Troubleshooting
+
+| Problem | Fix |
+| --- | --- |
+| `pnpm: command not found` | Run `corepack enable`, or `npm i -g pnpm` |
+| Port 5173 is busy | Stop the other dev server; the port is fixed so tests and links stay stable |
+| Hold-to-convert opens the file instead | Hold still for about half a second; moving more than a few pixels cancels the hold |
+| A conversion says "Already as small as it can get" | The file has no more to give at this level; try *Smallest* in Settings |
+| Video conversion is slow | FFmpeg runs as WebAssembly in the browser. Use the desktop app, shorter clips, or the *Smallest* level |
+| `desktop:build` fails | Install the [Tauri prerequisites](https://tauri.app/start/prerequisites/) (Rust and the Windows build tools) |
+
+## ✦ Contributing
+
+Issues and pull requests are welcome. Please run `pnpm typecheck` and `pnpm test` before opening a PR, keep new dependencies justified, and read [SECURITY.md](SECURITY.md) before touching file parsing, sanitization or Tauri permissions. Never report vulnerabilities in a public issue.
 ## ✦ Documentation
 
 | | |
