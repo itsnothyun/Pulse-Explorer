@@ -43,6 +43,23 @@ It runs in the browser and as a native desktop app (Tauri v2). An optional conta
 | 🗜️ | **Archives** | `zip` `tar` `gz` `tgz` with a virtual tree and recursive inner-file preview |
 | 🔍 | **Anything else** | Hex and ASCII inspector with offsets and a data inspector |
 
+## ✦ Hold to convert
+
+Press and hold any file in the library, dashboard or recents (touch or mouse, about half a second). A circle appears with the formats that file can become. **Drag onto one and let go**: the result is saved next to the original, in the same collection, and the original is never touched. Release on empty space to keep the circle open and tap instead, or use **Convert / Compress…** in the right-click menu for keyboard access.
+
+Everything runs on your device. FFmpeg ships as WebAssembly inside the app, so nothing is uploaded or fetched from a CDN.
+
+| From | To |
+| --- | --- |
+| Images (`png` `jpg` `webp` `bmp` `svg`) | other raster formats, PDF, or Compress (resize and re-encode) |
+| PDF | PNG or JPG pages (ZIP if several), text, or Compress |
+| `docx` `pptx` `xlsx` | text or PDF (text only, layout is not preserved), or Compress (repacks and shrinks embedded photos) |
+| `csv` `tsv` `json` `yaml` `xlsx` `ods` | each other, with JSON minify |
+| Audio and video | `mp3` `wav` `ogg` `flac` `m4a` `mp4` `webm`, or Compress |
+| `zip` `tar` `tgz` | each other, or Compress |
+
+**Compress** keeps the format and uses the level set in *Settings → Files* (Smallest, Balanced, Best). If a file can't get any smaller, it tells you instead of saving a bigger copy. Compressing a PDF at Smallest or Balanced flattens pages to images, so the text is no longer selectable; Best repacks losslessly.
+
 **Also included**
 
 - Annotations stored as zoom-invariant normalized (`0..1`) coordinates, cell references, line ranges and media timecodes

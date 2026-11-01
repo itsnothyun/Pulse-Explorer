@@ -3,6 +3,7 @@ import { ArrowRight, Globe, Star, Upload } from 'lucide-react';
 import type { DetectedFile, FileCategory } from '@omniview/shared-types';
 import { formatFileSize } from '@omniview/utilities';
 import { useWorkspaceStore } from '../stores/useWorkspaceStore';
+import { useFileLongPress } from '../hooks/useFileLongPress';
 import { Eyebrow, PixelText, SegmentBar } from './pulse/Pixel';
 import { useCountUp } from './pulse/motion';
 
@@ -30,6 +31,7 @@ interface DashboardProps {
 
 /** Home screen: what is here, what you were reading, and the two ways to add more. */
 export function Dashboard({ getIcon, onOpenFile, onOpenPicker, onImportUrl, onShowLibrary, onFileContextMenu, onQuickView }: DashboardProps) {
+  const bindLongPress = useFileLongPress();
   const files = useWorkspaceStore((s) => s.files);
   const tabs = useWorkspaceStore((s) => s.tabs);
   const recentFileIds = useWorkspaceStore((s) => s.recentFileIds);
@@ -140,6 +142,7 @@ export function Dashboard({ getIcon, onOpenFile, onOpenPicker, onImportUrl, onSh
                   return (
                     <li key={f.id} className="border-b border-slate-800">
                       <button
+                        {...bindLongPress(f)}
                         data-testid={`dashboard-file-${f.originalName}`}
                         onClick={() => onOpenFile(f.id)}
                         onContextMenu={(e) => {

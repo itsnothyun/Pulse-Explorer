@@ -20,6 +20,7 @@ export type ImportSource =
   | 'url-import'
   | 'archive-entry'
   | 'desktop-open-with'
+  | 'conversion'
   | 'sample-fixture';
 
 export type FileProcessingStatus =

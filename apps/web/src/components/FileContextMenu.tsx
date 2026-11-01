@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { Download, ExternalLink, Eye, Folder, Pencil, Star, Trash2, Columns } from 'lucide-react';
+import { Download, ExternalLink, Eye, Folder, Pencil, RefreshCw, Star, Trash2, Columns } from 'lucide-react';
 import type { DetectedFile, WorkspaceFolder } from '@omniview/shared-types';
+import { getTargets } from '../converters/registry';
 
 export interface FileMenuState {
   file: DetectedFile;
@@ -21,6 +22,7 @@ interface FileContextMenuProps {
   onMove: (file: DetectedFile, folderId: string | null) => void;
   onDownload: (file: DetectedFile) => void;
   onTrash: (file: DetectedFile) => void;
+  onConvert: (file: DetectedFile, x: number, y: number) => void;
 }
 
 /** Right-click menu for any file in the library or dashboard. */
@@ -63,6 +65,7 @@ export function FileContextMenu(props: FileContextMenuProps) {
 
   if (!state) return null;
   const { file } = state;
+  const canConvert = !file.isTrashed && getTargets({ extension: file.extension, category: file.category }).length > 0;
   const act = (fn: () => void) => () => {
     fn();
     onClose();
@@ -139,6 +142,11 @@ export function FileContextMenu(props: FileContextMenuProps) {
             </button>
           ))}
           <div className="pulse-rule-dotted my-1.5 mx-2" />
+          {canConvert && (
+            <button role="menuitem" onClick={act(() => props.onConvert(file, state.x, state.y))} className="gap-2.5">
+              <RefreshCw className="w-3.5 h-3.5" /> Convert / Compress…
+            </button>
+          )}
           <button role="menuitem" onClick={act(() => props.onDownload(file))} className="gap-2.5">
             <Download className="w-3.5 h-3.5" /> Download original
           </button>

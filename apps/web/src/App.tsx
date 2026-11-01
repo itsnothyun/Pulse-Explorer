@@ -12,6 +12,10 @@ import { Segmented } from './components/pulse/Segmented';
 import { NewCollectionModal } from './components/NewCollectionModal';
 import { CommandPalette, type Command } from './components/CommandPalette';
 import { FileContextMenu, type FileMenuState } from './components/FileContextMenu';
+import { ConvertOverlay } from './components/ConvertOverlay';
+import { ConvertToasts } from './components/ConvertToasts';
+import { useFileLongPress } from './hooks/useFileLongPress';
+import { useConvertStore } from './stores/useConvertStore';
 import { useEnterOnChange } from './components/pulse/motion';
 import { WindowControls } from './components/pulse/WindowControls';
 import { TYPE_EXTENSIONS, isDesktop, openDefaultAppsSettings, startWindowDrag, subscribeToOpenWithFiles, syncExplorerOpenMode } from './services/desktopBridge';
@@ -197,6 +201,7 @@ export const App: React.FC = () => {
   const [showHome, setShowHome] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [fileMenu, setFileMenu] = useState<FileMenuState | null>(null);
+  const bindLongPress = useFileLongPress();
   const [typesOpen, setTypesOpen] = useState(true);
   const viewportRef = useRef<HTMLDivElement>(null);
   const quickViewOpenRef = useRef(false);
@@ -1403,6 +1408,7 @@ export const App: React.FC = () => {
                     {filteredFiles.map((file) => (
                       <div
                         key={file.id}
+                        {...bindLongPress(file)}
                         data-testid={`library-file-${file.originalName}`}
                         onClick={() => openFile(file.id)}
                         tabIndex={0}
@@ -1482,6 +1488,7 @@ export const App: React.FC = () => {
                         {filteredFiles.map((file) => (
                           <tr
                             key={file.id}
+                            {...bindLongPress(file)}
                             onClick={() => openFile(file.id)}
                             onContextMenu={(e) => {
                               e.preventDefault();
@@ -1970,7 +1977,10 @@ export const App: React.FC = () => {
         onMove={(f, folderId) => assignFileToFolder(f.id, folderId)}
         onDownload={handleDownloadOriginal}
         onTrash={(f) => moveFileToTrash(f.id)}
+        onConvert={(f, x, y) => useConvertStore.getState().openCircle({ file: f, x, y, held: false })}
       />
+      <ConvertOverlay />
+      <ConvertToasts />
     </div>
   );
 };

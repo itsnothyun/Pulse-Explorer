@@ -3,6 +3,7 @@ import type { DetectedFile } from '@omniview/shared-types';
 import { formatFileSize } from '@omniview/utilities';
 import { ensureSystemFileImported, isDesktop, listRecentSystemFiles, type RecentSystemFile } from '../services/desktopBridge';
 import { useWorkspaceStore } from '../stores/useWorkspaceStore';
+import { useFileLongPress } from '../hooks/useFileLongPress';
 import { PixelIcon, categoryGlyph } from './pulse/PixelIcon';
 import { Eyebrow, PixelText } from './pulse/Pixel';
 import { Segmented } from './pulse/Segmented';
@@ -43,6 +44,7 @@ interface RecentViewProps {
  * lists as recently opened, sortable by when it was opened or last modified.
  */
 export function RecentView({ query, onOpenFile, onFileContextMenu, onQuickView }: RecentViewProps) {
+  const bindLongPress = useFileLongPress();
   const files = useWorkspaceStore((s) => s.files);
   const recentFileIds = useWorkspaceStore((s) => s.recentFileIds);
   const sessions = useWorkspaceStore((s) => s.lastSessionByFileId);
@@ -124,6 +126,7 @@ export function RecentView({ query, onOpenFile, onFileContextMenu, onQuickView }
                 return (
                   <li key={f.id} className="border-b border-slate-800">
                     <button
+                      {...bindLongPress(f)}
                       onClick={() => onOpenFile(f.id)}
                       onContextMenu={(e) => {
                         e.preventDefault();

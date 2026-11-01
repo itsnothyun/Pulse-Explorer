@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useWorkspaceStore, resetWorkspace } from '../stores/useWorkspaceStore';
+import { useConvertStore } from '../stores/useConvertStore';
 import { isDesktop, openDefaultAppsSettings } from '../services/desktopBridge';
 import { PixelIcon } from './pulse/PixelIcon';
 import { PixelText } from './pulse/Pixel';
@@ -51,6 +52,8 @@ export function SettingsModal({ open, tab, onTabChange, onClose, onImportUrl }: 
   const fileCount = useWorkspaceStore((s) => s.files.length);
   const explorerOpenMode = useWorkspaceStore((s) => s.explorerOpenMode);
   const setExplorerOpenMode = useWorkspaceStore((s) => s.setExplorerOpenMode);
+  const convertLevel = useConvertStore((s) => s.level);
+  const setConvertLevel = useConvertStore((s) => s.setLevel);
   const [armed, setArmed] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
   const restoreFocus = useRef<HTMLElement | null>(null);
@@ -166,6 +169,21 @@ export function SettingsModal({ open, tab, onTabChange, onClose, onImportUrl }: 
                   options={[
                     { value: 'quick-view', label: 'Quick View' },
                     { value: 'tab', label: 'Tab' },
+                  ]}
+                />
+              </Row>
+              <Row
+                title="Convert and compress"
+                detail="Hold a file, then drag onto a format. This sets how hard Compress and lossy formats squeeze. Everything runs on this device."
+              >
+                <Segmented
+                  label="Convert and compress quality"
+                  value={convertLevel}
+                  onChange={setConvertLevel}
+                  options={[
+                    { value: 'small', label: 'Smallest' },
+                    { value: 'balanced', label: 'Balanced' },
+                    { value: 'best', label: 'Best' },
                   ]}
                 />
               </Row>

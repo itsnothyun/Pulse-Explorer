@@ -9,6 +9,9 @@ export default defineConfig({
     strictPort: true,
   },
   optimizeDeps: {
-    include: ['pdfjs-dist', 'mammoth', 'xlsx', 'papaparse', 'jszip', 'marked'],
+    include: ['pdfjs-dist', 'mammoth', 'xlsx', 'papaparse', 'jszip', 'marked', 'fflate', 'yaml', 'pdf-lib'],
+    // FFmpeg spawns its own module worker, which breaks when pre-bundled.
+    exclude: ['@ffmpeg/ffmpeg', '@ffmpeg/util'],
   },
+  worker: { format: 'es' },
 });
