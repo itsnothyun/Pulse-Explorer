@@ -1,0 +1,172 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Pulse Explorer",
+  "version": "1.0.0",
+  "identifier": "app.pulse.explorer",
+  "build": {
+    "beforeDevCommand": "pnpm --filter @omniview/web dev",
+    "devUrl": "http://localhost:5173",
+    "beforeBuildCommand": "pnpm --filter @omniview/web build",
+    "frontendDist": "../../web/dist"
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "windows": [
+      {
+        "label": "main",
+        "title": "Pulse Explorer",
+        "width": 1440,
+        "height": 920,
+        "minWidth": 960,
+        "minHeight": 640,
+        "resizable": true,
+        "fullscreen": false,
+        "decorations": false,
+        "dragDropEnabled": true,
+        "shadow": true,
+        "backgroundColor": "#090909",
+        "visible": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data: asset: http://asset.localhost; media-src 'self' blob: asset: http://asset.localhost; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost http://localhost:4000; object-src 'none'; frame-src 'none'",
+      "assetProtocol": {
+        "enable": true,
+        "scope": [
+          "**"
+        ]
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "nsis"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "fileAssociations": [
+      {
+        "ext": [
+          "pdf"
+        ],
+        "name": "PDF Document",
+        "description": "Portable Document Format",
+        "role": "Viewer",
+        "mimeType": "application/pdf"
+      },
+      {
+        "ext": [
+          "docx",
+          "doc",
+          "odt",
+          "rtf"
+        ],
+        "name": "Document",
+        "description": "Word processing document",
+        "role": "Viewer"
+      },
+      {
+        "ext": [
+          "pptx",
+          "ppt",
+          "odp"
+        ],
+        "name": "Presentation",
+        "description": "Slide presentation",
+        "role": "Viewer"
+      },
+      {
+        "ext": [
+          "xlsx",
+          "xls",
+          "ods",
+          "csv",
+          "tsv"
+        ],
+        "name": "Spreadsheet",
+        "description": "Spreadsheet or tabular data",
+        "role": "Viewer"
+      },
+      {
+        "ext": [
+          "epub",
+          "fb2"
+        ],
+        "name": "eBook",
+        "description": "Electronic book",
+        "role": "Viewer"
+      },
+      {
+        "ext": [
+          "png",
+          "jpg",
+          "jpeg",
+          "webp",
+          "gif",
+          "bmp",
+          "ico",
+          "svg"
+        ],
+        "name": "Image",
+        "description": "Raster or vector image",
+        "role": "Viewer"
+      },
+      {
+        "ext": [
+          "md",
+          "json",
+          "yaml",
+          "yml",
+          "toml",
+          "xml",
+          "log",
+          "ini",
+          "txt"
+        ],
+        "name": "Text Document",
+        "description": "Text, data or config file",
+        "role": "Viewer"
+      },
+      {
+        "ext": [
+          "mp4",
+          "webm",
+          "mp3",
+          "wav",
+          "flac",
+          "ogg",
+          "aac"
+        ],
+        "name": "Media File",
+        "description": "Audio or video",
+        "role": "Viewer"
+      },
+      {
+        "ext": [
+          "zip",
+          "tar",
+          "gz",
+          "tgz"
+        ],
+        "name": "Archive",
+        "description": "Compressed archive",
+        "role": "Viewer"
+      }
+    ],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "installerHooks": "installer-hooks.nsh"
+      }
+    },
+    "resources": {
+      "filetype-icons/*.ico": "filetype-icons/"
+    }
+  },
+  "mainBinaryName": "PulseExplorer"
+}

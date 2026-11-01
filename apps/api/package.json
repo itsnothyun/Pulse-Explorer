@@ -1,0 +1,25 @@
+{
+  "name": "@omniview/api",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "prisma:generate": "prisma generate"
+  },
+  "dependencies": {
+    "@omniview/config": "workspace:*",
+    "@omniview/shared-types": "workspace:*",
+    "@omniview/utilities": "workspace:*",
+    "fastify": "^5.2.0"
+  },
+  "devDependencies": {
+    "@prisma/client": "^6.2.0",
+    "prisma": "^6.2.0",
+    "tsx": "^4.19.2"
+  }
+}

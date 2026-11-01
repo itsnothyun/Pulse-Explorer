@@ -1,0 +1,596 @@
+@import "tailwindcss";
+
+/*
+ * Pulse design tokens (https://github.com/itsnothyun/Pulse, DESIGN.md).
+ * Strictly achromatic: every value is a step on one warm grey line from
+ * #090909 to #f2f2ed. Every Tailwind hue is remapped onto that line so
+ * existing utility classes inherit the system; state reads as brightness.
+ */
+
+@font-face {
+  font-family: "Schibsted Grotesk";
+  src: url("/fonts/SchibstedGrotesk-Variable.woff2") format("woff2");
+  font-weight: 400 900;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Schibsted Grotesk";
+  src: url("/fonts/SchibstedGrotesk-Italic-Variable.woff2") format("woff2");
+  font-weight: 400 900;
+  font-style: italic;
+  font-display: swap;
+}
+
+@theme {
+  /* Named Pulse colours */
+  --color-ground: #090909;
+  --color-ground-raised: #0e0e0e;
+  --color-well: #0f0f0e;
+  --color-wallpaper: #121211;
+  --color-pixel-on: #f2f2ed;
+  --color-pixel-mid: #b3b3ad;
+  --color-text-dim: #8c8c88;
+  --color-pixel-dim: #757573;
+  --color-edge-strong: #4a4a47;
+  --color-rule-dotted: #3a3a37;
+  --color-rule: #303030;
+  --color-edge: #2a2a28;
+  --color-pixel-off: #262626;
+  --color-menu: #181817;
+
+  /* Neutral scale (slate/gray/zinc/neutral) mapped to the Pulse grey line */
+  --color-slate-50: #f2f2ed;
+  --color-slate-100: #f2f2ed;
+  --color-slate-200: #d6d6d0;
+  --color-slate-300: #b3b3ad;
+  --color-slate-400: #8c8c88;
+  --color-slate-500: #757573;
+  --color-slate-600: #4a4a47;
+  --color-slate-700: #3a3a37;
+  --color-slate-800: #2a2a28;
+  --color-slate-900: #0e0e0e;
+  --color-slate-950: #090909;
+
+  /* Accent (blue/indigo/sky/cyan) becomes Phosphor White: "on" */
+  --color-blue-50: #ffffff;
+  --color-blue-100: #ffffff;
+  --color-blue-200: #f2f2ed;
+  --color-blue-300: #f2f2ed;
+  --color-blue-400: #d6d6d0;
+  --color-blue-500: #ffffff;
+  --color-blue-600: #f2f2ed;
+  --color-blue-700: #b3b3ad;
+  --color-blue-800: #3a3a37;
+  --color-blue-900: #181817;
+  --color-blue-950: #121211;
+  --color-indigo-400: #d6d6d0;
+  --color-indigo-500: #b3b3ad;
+  --color-indigo-600: #b3b3ad;
+  --color-indigo-950: #121211;
+  --color-cyan-400: #b3b3ad;
+  --color-sky-400: #d6d6d0;
+
+  /* Status hues collapse to brightness (The Lit-or-Not Rule) */
+  --color-emerald-200: #f2f2ed;
+  --color-emerald-300: #d6d6d0;
+  --color-emerald-400: #d6d6d0;
+  --color-emerald-500: #b3b3ad;
+  --color-emerald-600: #b3b3ad;
+  --color-amber-100: #f2f2ed;
+  --color-amber-200: #f2f2ed;
+  --color-amber-300: #f2f2ed;
+  --color-amber-400: #f2f2ed;
+  --color-amber-500: #d6d6d0;
+  --color-rose-200: #f2f2ed;
+  --color-rose-300: #f2f2ed;
+  --color-rose-400: #f2f2ed;
+  --color-rose-500: #b3b3ad;
+  --color-rose-950: #121211;
+  --color-yellow-400: #d6d6d0;
+  --color-orange-400: #d6d6d0;
+  --color-purple-400: #b3b3ad;
+  --color-pink-400: #b3b3ad;
+
+  /* Typography */
+  --font-sans: "Schibsted Grotesk", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+
+  /* Radii: hair 2, key 3, button 4, control 6, panel 8, screen 12, widget 14 */
+  --radius-xs: 2px;
+  --radius-sm: 3px;
+  --radius-md: 6px;
+  --radius-lg: 6px;
+  --radius-xl: 8px;
+  --radius-2xl: 14px;
+
+  /* Shadows: desktop objects only (screens, windows, menus) */
+  --shadow-sm: none;
+  --shadow: none;
+  --shadow-inner: none;
+  --shadow-lg: 0 18px 40px -12px rgba(0, 0, 0, 0.9);
+  --shadow-xl: 0 24px 40px -18px rgba(0, 0, 0, 0.85);
+  --shadow-2xl: 0 30px 60px -30px rgba(0, 0, 0, 0.9);
+
+  /* House ease */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --default-transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+  --default-transition-duration: 180ms;
+}
+
+@layer base {
+  html {
+    background: var(--color-ground);
+    color-scheme: dark;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    background: var(--color-ground);
+    color: var(--color-pixel-on);
+    user-select: none;
+  }
+
+  /* The Scanline Rule: faint 1px lines every 3px over the dark ground */
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    pointer-events: none;
+    background: repeating-linear-gradient(to bottom, rgba(242, 242, 237, 0.018) 0 1px, transparent 1px 3px);
+  }
+
+  ::selection {
+    background: var(--color-pixel-on);
+    color: var(--color-ground);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-pixel-on);
+    outline-offset: 3px;
+    border-radius: 2px;
+  }
+
+  /* Pixel scrollbar: a 4px column of square segments (2px lit, 1px gap), no arrows,
+     no track. Dim at rest, lit on hover, like a Pulse bar. Standard scrollbar-color /
+     scrollbar-width are deliberately unset: Chromium ignores these rules when they are. */
+  ::-webkit-scrollbar { width: 8px; height: 8px; background: transparent; }
+  ::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+  ::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
+  ::-webkit-scrollbar-thumb {
+    border: 2px solid transparent;
+    background-clip: content-box;
+    background-color: transparent;
+    background-image: repeating-linear-gradient(to bottom, var(--color-edge-strong) 0 2px, transparent 2px 3px);
+    border-radius: 0;
+    min-height: 24px;
+  }
+  ::-webkit-scrollbar-thumb:horizontal {
+    background-image: repeating-linear-gradient(to right, var(--color-edge-strong) 0 2px, transparent 2px 3px);
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background-image: repeating-linear-gradient(to bottom, var(--color-pixel-mid) 0 2px, transparent 2px 3px);
+  }
+  ::-webkit-scrollbar-thumb:horizontal:hover {
+    background-image: repeating-linear-gradient(to right, var(--color-pixel-mid) 0 2px, transparent 2px 3px);
+  }
+  ::-webkit-scrollbar-thumb:active {
+    background-image: repeating-linear-gradient(to bottom, var(--color-pixel-on) 0 2px, transparent 2px 3px);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+/* Pulse 4x4 ordered-dither "wallpaper" for transparent-image backdrops */
+.checkerboard-bg {
+  background-color: var(--color-wallpaper);
+  background-image: radial-gradient(rgba(242, 242, 237, 0.09) 1px, transparent 1px);
+  background-size: 4px 4px;
+}
+
+.selectable-text {
+  user-select: text;
+}
+
+/* ------------------------------------------------------------ pixel type */
+.px { display: block; color: var(--color-pixel-on); line-height: 0; }
+.px .px-line { display: block; }
+.px .px-line + .px-line { margin-top: calc(var(--dot) * 3); }
+.px .px-center { display: flex; justify-content: center; }
+.px svg { max-width: none; }
+.px-eye { color: var(--color-pixel-mid); }
+.px-assemble rect { animation: dot-in 420ms var(--ease-out) both; }
+@keyframes dot-in {
+  from { opacity: 0; transform: translateY(-2px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* ------------------------------------------------------------ brand */
+.brand { display: inline-flex; align-items: center; gap: 10px; }
+.brand-icon { width: 28px; height: 28px; image-rendering: auto; flex: none; }
+.brand .brand-scan { margin-left: -2px; margin-top: 3px; }
+.eyebrow { display: inline-flex; align-items: center; gap: 12px; }
+
+/* ------------------------------------------------------------ the widget's loops */
+.scan {
+  --d: 3px; --st: 5px; --beat: 0.16s;
+  position: relative; display: inline-block; flex: none;
+  width: calc(var(--st) * 7 + var(--d)); height: var(--d);
+  background: repeating-linear-gradient(90deg, rgba(242, 242, 237, 0.12) 0 var(--d), transparent var(--d) var(--st));
+}
+.scan i {
+  position: absolute; left: 0; top: 0; width: var(--d); height: var(--d); background: var(--color-pixel-on);
+  animation: scan calc(var(--beat) * 14) steps(1, end) infinite;
+}
+.scan i:nth-child(1) { opacity: 0.25; animation-delay: calc(var(--beat) * -12); }
+.scan i:nth-child(2) { opacity: 0.5; animation-delay: calc(var(--beat) * -13); }
+.scan i:nth-child(3) { opacity: 0.9; }
+.scan-hot { --beat: 0.07s; }
+.scan-big { --d: 6px; --st: 10px; }
+@keyframes scan {
+  0%, 100% { transform: translateX(0); }
+  7.143% { transform: translateX(var(--st)); }
+  14.286% { transform: translateX(calc(var(--st) * 2)); }
+  21.429% { transform: translateX(calc(var(--st) * 3)); }
+  28.571% { transform: translateX(calc(var(--st) * 4)); }
+  35.714% { transform: translateX(calc(var(--st) * 5)); }
+  42.857% { transform: translateX(calc(var(--st) * 6)); }
+  50% { transform: translateX(calc(var(--st) * 7)); }
+  57.143% { transform: translateX(calc(var(--st) * 6)); }
+  64.286% { transform: translateX(calc(var(--st) * 5)); }
+  71.429% { transform: translateX(calc(var(--st) * 4)); }
+  78.571% { transform: translateX(calc(var(--st) * 3)); }
+  85.714% { transform: translateX(calc(var(--st) * 2)); }
+  92.857% { transform: translateX(var(--st)); }
+}
+
+.pip {
+  display: inline-block; flex: none; width: 6px; height: 6px; background: var(--color-pixel-on);
+  animation: breathe 1.3s ease-in-out infinite alternate;
+}
+.pip-still { animation: none; opacity: 0.85; }
+@keyframes breathe { from { opacity: 0.3; } to { opacity: 1; } }
+
+.sweep { position: absolute; inset: 0; z-index: 0; overflow: hidden; pointer-events: none; }
+.sweep::after {
+  content: ""; position: absolute; inset: 0;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0), rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0)) top / 100% 90px no-repeat;
+  animation: sweep 9s linear infinite;
+}
+@keyframes sweep { from { transform: translateY(-90px); } to { transform: translateY(100%); } }
+
+/* Square pixel spinner (replaces round spinners: no circles in data) */
+.px-spinner { display: inline-grid; grid-template-columns: repeat(3, 6px); gap: 2px; }
+.px-spinner i { width: 6px; height: 6px; background: var(--color-pixel-off); animation: px-spin 0.96s steps(1, end) infinite; }
+.px-spinner i:nth-child(1) { animation-delay: 0s; }
+.px-spinner i:nth-child(2) { animation-delay: 0.12s; }
+.px-spinner i:nth-child(3) { animation-delay: 0.24s; }
+.px-spinner i:nth-child(6) { animation-delay: 0.36s; }
+.px-spinner i:nth-child(9) { animation-delay: 0.48s; }
+.px-spinner i:nth-child(8) { animation-delay: 0.6s; }
+.px-spinner i:nth-child(7) { animation-delay: 0.72s; }
+.px-spinner i:nth-child(4) { animation-delay: 0.84s; }
+.px-spinner i:nth-child(5) { animation: none; background: transparent; }
+@keyframes px-spin { 0%, 24% { background: var(--color-pixel-on); } 25%, 100% { background: var(--color-pixel-off); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .scan i, .pip, .sweep::after, .px-assemble rect, .px-spinner i { animation: none !important; }
+  .scan i:nth-child(-n+2) { display: none; }
+  .scan i:nth-child(3) { transform: translateX(calc(var(--st) * 2)); }
+  .sweep { display: none; }
+  .pip { opacity: 0.85; }
+}
+
+/* ------------------------------------------------------------ component recipes */
+@layer components {
+  /* ---------------------------------------------------------- pixel buttons
+     Stepped 2px "pixel notch" corners instead of rounding, a keycap edge on the
+     bottom that the button presses into, and 7x7 pixel icons. The focus ring is
+     drawn inside (outline-offset negative) because clip-path clips anything outside. */
+  .pulse-btn {
+    --notch: 2px;
+    position: relative;
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    height: 34px; padding: 0 14px;
+    font: 600 12.5px/1 var(--font-sans); letter-spacing: 0.005em; white-space: nowrap;
+    background: var(--color-pixel-on); color: var(--color-ground);
+    border: 0; border-radius: 0;
+    clip-path: polygon(
+      0 var(--notch), var(--notch) var(--notch), var(--notch) 0,
+      calc(100% - var(--notch)) 0, calc(100% - var(--notch)) var(--notch), 100% var(--notch),
+      100% calc(100% - var(--notch)), calc(100% - var(--notch)) calc(100% - var(--notch)), calc(100% - var(--notch)) 100%,
+      var(--notch) 100%, var(--notch) calc(100% - var(--notch)), 0 calc(100% - var(--notch))
+    );
+    box-shadow: inset 0 -2px 0 rgba(0, 0, 0, 0.22);
+    transition: background-color 160ms var(--ease-out), color 160ms var(--ease-out),
+      box-shadow 120ms var(--ease-out), transform 120ms var(--ease-out);
+  }
+  .pulse-btn:hover { background: #fff; }
+  .pulse-btn:active { transform: translateY(1px); box-shadow: inset 0 0 0 rgba(0, 0, 0, 0); }
+  .pulse-btn:focus-visible { outline: 2px solid var(--color-ground); outline-offset: -4px; }
+  .pulse-btn:disabled { opacity: 0.4; pointer-events: none; }
+  .pulse-btn-lg { height: 44px; padding: 0 20px; font-size: 14px; }
+  .pulse-btn-sm { height: 28px; padding: 0 10px; font-size: 12px; gap: 6px; }
+
+  /* Ghost: a 1px pixel frame (inset shadow, so the notch shows as cut corners) */
+  .pulse-btn-ghost {
+    background: transparent; color: var(--color-pixel-on);
+    box-shadow: inset 0 0 0 1px var(--color-edge-strong), inset 0 -3px 0 -1px rgba(242, 242, 237, 0.05);
+  }
+  .pulse-btn-ghost:hover { background: rgba(242, 242, 237, 0.06); box-shadow: inset 0 0 0 1px var(--color-pixel-mid); }
+  .pulse-btn-ghost:active { box-shadow: inset 0 0 0 1px var(--color-pixel-on); }
+  .pulse-btn-ghost:focus-visible { outline-color: var(--color-pixel-on); }
+
+  /* Quiet: no frame until hover; for toolbar-like rows */
+  .pulse-btn-quiet { background: transparent; color: var(--color-pixel-mid); box-shadow: none; }
+  .pulse-btn-quiet:hover { background: rgba(242, 242, 237, 0.06); color: var(--color-pixel-on); }
+  .pulse-btn-quiet:focus-visible { outline-color: var(--color-pixel-on); }
+
+  /* Danger keeps the palette achromatic: inverted frame, lit on confirm */
+  .pulse-btn-danger { background: transparent; color: var(--color-pixel-on); box-shadow: inset 0 0 0 1px var(--color-pixel-mid); }
+  .pulse-btn-danger:hover, .pulse-btn-danger[data-armed="true"] { background: var(--color-pixel-on); color: var(--color-ground); box-shadow: none; }
+
+  /* Keyboard hint chip, pixel-cornered */
+  .pulse-kbd {
+    display: inline-flex; align-items: center; height: 16px; padding: 0 4px;
+    font: 500 10px/1 var(--font-mono); color: inherit; opacity: 0.6;
+    box-shadow: inset 0 0 0 1px currentColor;
+    clip-path: polygon(0 1px, 1px 1px, 1px 0, calc(100% - 1px) 0, calc(100% - 1px) 1px, 100% 1px, 100% calc(100% - 1px), calc(100% - 1px) calc(100% - 1px), calc(100% - 1px) 100%, 1px 100%, 1px calc(100% - 1px), 0 calc(100% - 1px));
+  }
+
+  /* Segmented control with a sliding phosphor thumb */
+  .pulse-seg {
+    position: relative; display: inline-grid; grid-auto-flow: column; grid-auto-columns: 1fr;
+    padding: 3px; gap: 0; box-shadow: inset 0 0 0 1px var(--color-rule);
+  }
+  .pulse-seg-thumb {
+    position: absolute; top: 3px; bottom: 3px; left: 3px; background: var(--color-pixel-on);
+    transition: transform 260ms var(--ease-out), width 260ms var(--ease-out);
+  }
+  .pulse-seg > button {
+    position: relative; z-index: 1; height: 28px; padding: 0 12px;
+    color: var(--color-pixel-mid); font: 600 12px/1 var(--font-sans);
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    transition: color 200ms var(--ease-out);
+  }
+  .pulse-seg > button:hover { color: var(--color-pixel-on); }
+  .pulse-seg > button[aria-pressed="true"], .pulse-seg > button[aria-selected="true"] { color: var(--color-ground); }
+  .pulse-seg > button:focus-visible { outline-offset: -3px; }
+
+  .pulse-board { position: relative; background: var(--color-ground-raised); border: 1px solid var(--color-edge); border-radius: 14px; padding: clamp(24px, 3vw, 40px); }
+  .pulse-board > :not(.sweep) { position: relative; z-index: 1; }
+  .pulse-well { background: var(--color-well); border: 1px solid var(--color-edge); border-radius: 6px; padding: 12px 14px; font-family: var(--font-mono); font-size: 13px; line-height: 1.5; }
+  .pulse-menu { background: rgba(24, 24, 23, 0.98); border: 1px dotted var(--color-rule-dotted); border-radius: 8px; padding: 6px; box-shadow: 0 18px 40px -12px rgba(0, 0, 0, 0.9); }
+  .pulse-menu > button { display: flex; align-items: center; width: 100%; height: 34px; padding: 0 12px; border-radius: 4px; font: 500 14px/1 var(--font-sans); color: var(--color-pixel-on); }
+  .pulse-menu > button:hover, .pulse-menu > button:focus-visible { background: var(--color-pixel-on); color: var(--color-ground); outline: none; }
+  .pulse-tile { background: var(--color-ground); border: 1px solid var(--color-rule); padding: 10px; }
+  .pulse-rule-dotted { height: 1px; background: repeating-linear-gradient(90deg, var(--color-rule) 0 2px, transparent 2px 4px); }
+  .pulse-step { display: inline-grid; place-items: center; width: 28px; height: 28px; border: 1px solid var(--color-edge-strong); border-radius: 3px; font: 600 13px/1 var(--font-mono); }
+  .pulse-caption { color: var(--color-text-dim); font-size: 13px; line-height: 1.4; }
+
+  /* Icon button: a 28px pixel-notched square; inverted when it is the active tool */
+  .icon-btn {
+    display: inline-grid; place-items: center; width: 28px; height: 28px; flex: none;
+    color: var(--color-pixel-mid); border-radius: 0;
+    clip-path: polygon(0 2px, 2px 2px, 2px 0, calc(100% - 2px) 0, calc(100% - 2px) 2px, 100% 2px, 100% calc(100% - 2px), calc(100% - 2px) calc(100% - 2px), calc(100% - 2px) 100%, 2px 100%, 2px calc(100% - 2px), 0 calc(100% - 2px));
+    transition: background-color 160ms var(--ease-out), color 160ms var(--ease-out), transform 120ms var(--ease-out);
+  }
+  .icon-btn:hover { background: rgba(242, 242, 237, 0.07); color: var(--color-pixel-on); }
+  .icon-btn:focus-visible { outline: 2px solid var(--color-pixel-on); outline-offset: -3px; }
+  .icon-btn:disabled { opacity: 0.3; pointer-events: none; }
+  .icon-btn-on { background: rgba(242, 242, 237, 0.09); color: var(--color-pixel-on); }
+  .icon-btn-active, .icon-btn-active:hover { background: var(--color-pixel-on); color: var(--color-ground); }
+  .icon-btn-active:focus-visible { outline-color: var(--color-ground); }
+
+  /* Command well: Pulse's recessed input look, used for "Jump to" */
+  .pulse-wellbtn {
+    display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 8px;
+    background: var(--color-well); color: var(--color-pixel-mid);
+    box-shadow: inset 0 0 0 1px var(--color-edge);
+    clip-path: polygon(0 2px, 2px 2px, 2px 0, calc(100% - 2px) 0, calc(100% - 2px) 2px, 100% 2px, 100% calc(100% - 2px), calc(100% - 2px) calc(100% - 2px), calc(100% - 2px) 100%, 2px 100%, 2px calc(100% - 2px), 0 calc(100% - 2px));
+    font: 400 12px/1 var(--font-sans);
+    transition: box-shadow 160ms var(--ease-out), color 160ms var(--ease-out);
+  }
+  .pulse-wellbtn:hover { color: var(--color-pixel-on); box-shadow: inset 0 0 0 1px var(--color-edge-strong); }
+  .pulse-wellbtn:focus-visible { outline: 2px solid var(--color-pixel-on); outline-offset: -3px; }
+}
+
+/* Desktop window controls: full-height 46px cells, close inverts to Phosphor */
+.win-controls { display: flex; align-self: stretch; margin-left: 8px; border-left: 1px solid var(--color-slate-800); }
+.win-btn {
+  display: grid; place-items: center; width: 46px; height: 100%;
+  color: var(--color-pixel-mid);
+  transition: background-color 120ms var(--ease-out), color 120ms var(--ease-out);
+}
+.win-btn:hover { background: rgba(242, 242, 237, 0.08); color: var(--color-pixel-on); }
+.win-btn-close:hover { background: var(--color-pixel-on); color: var(--color-ground); }
+.win-btn:focus-visible { outline-offset: -2px; }
+
+.no-scrollbar { scrollbar-width: none; }
+.no-scrollbar::-webkit-scrollbar { display: none; }
+
+/* ------------------------------------------------------------ motion
+   House ease, 160 to 320ms. Enter-only: things arrive softly and leave at once,
+   so the interface never waits on an animation. All off under reduced motion. */
+@keyframes ov-fade-up { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes ov-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes ov-pop { from { opacity: 0; transform: translateY(-4px) scale(0.97); } to { opacity: 1; transform: none; } }
+@keyframes ov-pop-center { from { opacity: 0; transform: translateY(8px) scale(0.98); } to { opacity: 1; transform: none; } }
+@keyframes ov-slide-left { from { opacity: 0; transform: translateX(-10px); } to { opacity: 1; transform: none; } }
+@keyframes ov-slide-right { from { opacity: 0; transform: translateX(10px); } to { opacity: 1; transform: none; } }
+@keyframes ov-underline { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+
+.anim-fade { animation: ov-fade 200ms var(--ease-out) both; }
+.anim-fade-up { animation: ov-fade-up 260ms var(--ease-out) both; }
+.anim-pop { animation: ov-pop 180ms var(--ease-out) both; transform-origin: top right; }
+.anim-pop-start { transform-origin: top left; }
+.anim-pop-center { animation: ov-pop-center 240ms var(--ease-out) both; }
+.anim-slide-left { animation: ov-slide-left 240ms var(--ease-out) both; }
+.anim-slide-right { animation: ov-slide-right 240ms var(--ease-out) both; }
+.anim-toast { animation: ov-pop-center 280ms var(--ease-out) both; }
+
+.anim-pop-up { transform-origin: bottom right; }
+
+/* Sidebar: stays mounted so it can animate both ways. On wide windows the
+   column width eases open and the contents drift in; on narrow windows it
+   slides over the document instead of squeezing it. */
+.sidebar {
+  flex: none; width: 208px; overflow: hidden;
+  transition: width 300ms var(--ease-out), border-color 300ms var(--ease-out);
+}
+.sidebar[data-open="false"] { width: 0; border-right-color: transparent; }
+.sidebar-inner {
+  width: 208px;
+  transition: opacity 220ms var(--ease-out), transform 300ms var(--ease-out);
+}
+.sidebar[data-open="false"] .sidebar-inner { opacity: 0; transform: translateX(-16px); }
+@media (max-width: 1023px) {
+  .sidebar {
+    position: absolute; inset-block: 0; left: 0; z-index: 30; width: 208px;
+    box-shadow: 0 24px 40px -18px rgba(0, 0, 0, 0.85);
+    transition: transform 300ms var(--ease-out), box-shadow 300ms var(--ease-out);
+  }
+  .sidebar[data-open="false"] { width: 208px; transform: translateX(-100%); box-shadow: none; }
+  .sidebar[data-open="false"] .sidebar-inner { transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sidebar, .sidebar-inner { transition: none !important; }
+}
+
+/* Staggered entry for lists and grids: first 12 children step 28ms apart */
+.anim-stagger > * { animation: ov-fade-up 320ms var(--ease-out) both; }
+.anim-stagger > *:nth-child(2) { animation-delay: 28ms; }
+.anim-stagger > *:nth-child(3) { animation-delay: 56ms; }
+.anim-stagger > *:nth-child(4) { animation-delay: 84ms; }
+.anim-stagger > *:nth-child(5) { animation-delay: 112ms; }
+.anim-stagger > *:nth-child(6) { animation-delay: 140ms; }
+.anim-stagger > *:nth-child(7) { animation-delay: 168ms; }
+.anim-stagger > *:nth-child(8) { animation-delay: 196ms; }
+.anim-stagger > *:nth-child(9) { animation-delay: 224ms; }
+.anim-stagger > *:nth-child(10) { animation-delay: 252ms; }
+.anim-stagger > *:nth-child(11) { animation-delay: 280ms; }
+.anim-stagger > *:nth-child(n+12) { animation-delay: 308ms; }
+
+/* Active tab underline grows from the centre */
+.tab-active::after { animation: ov-underline 240ms var(--ease-out) both; }
+
+/* Nav item: the active marker slides in from the left edge */
+.nav-item { position: relative; transition: background-color 160ms var(--ease-out), color 160ms var(--ease-out); }
+.nav-item { border-radius: 2px; }
+.nav-item[aria-current="page"] .nav-count { color: var(--color-pixel-on); }
+.pulse-select.is-open { box-shadow: inset 0 0 0 1px var(--color-pixel-on); background: rgba(242, 242, 237, 0.06); }
+.nav-item:focus-visible { outline: 2px solid var(--color-pixel-on); outline-offset: -2px; }
+.nav-item[aria-current="page"]::before {
+  content: ""; position: absolute; left: -10px; top: 7px; bottom: 7px; width: 2px; background: var(--color-pixel-on);
+  animation: ov-slide-left 200ms var(--ease-out) both;
+}
+
+/* Press feedback */
+.icon-btn { transition: background-color 160ms var(--ease-out), color 160ms var(--ease-out), transform 120ms var(--ease-out); }
+.icon-btn:active, .nav-item:active { transform: scale(0.96); }
+
+/* Library cards: border brightens on hover, nothing lifts (no shadows on content) */
+.lib-card { transition: border-color 180ms var(--ease-out), background-color 180ms var(--ease-out); }
+
+@media (prefers-reduced-motion: reduce) {
+  .anim-fade, .anim-fade-up, .anim-pop, .anim-pop-center, .anim-slide-left, .anim-slide-right, .anim-toast,
+  .anim-stagger > *, .tab-active::after, .nav-item[aria-current="page"]::before { animation: none !important; }
+  .icon-btn:active, .nav-item:active { transform: none; }
+}
+
+/* In-app "Reduce motion" setting mirrors the OS preference */
+.reduce-motion *, .reduce-motion *::before, .reduce-motion *::after {
+  animation-duration: 0.01ms !important; animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important; scroll-behavior: auto !important;
+}
+
+/* ------------------------------------------------------------ Quick View
+   A floating Pulse widget-panel over a blurred workspace: phosphor hairline
+   edge, widget scanlines, CRT sweep, scale-in on open and a quick fade on close. */
+@keyframes qv-in { from { opacity: 0; transform: translateY(14px) scale(0.955); } to { opacity: 1; transform: none; } }
+@keyframes qv-backdrop-in { from { opacity: 0; backdrop-filter: blur(0); } to { opacity: 1; backdrop-filter: blur(10px); } }
+.qv-backdrop {
+  background: rgba(5, 5, 5, 0.72);
+  backdrop-filter: blur(10px);
+  animation: qv-backdrop-in 260ms var(--ease-out) both;
+  transition: opacity 160ms var(--ease-out);
+}
+.qv-panel {
+  background: var(--color-ground);
+  border-radius: 14px;
+  box-shadow:
+    0 0 0 1px rgba(242, 242, 237, 0.16),
+    0 40px 80px -30px rgba(0, 0, 0, 0.95),
+    0 0 0 7px rgba(17, 17, 16, 0.85),
+    0 0 0 8px #232321;
+  overflow: hidden;
+  animation: qv-in 360ms var(--ease-out) both;
+  transition: opacity 160ms var(--ease-out), transform 160ms var(--ease-out);
+}
+.qv-panel::after {
+  content: ""; position: absolute; inset: 0; pointer-events: none; z-index: 20;
+  background: repeating-linear-gradient(to bottom, rgba(242, 242, 237, 0.02) 0 1px, transparent 1px 3px);
+}
+.qv-leaving { opacity: 0; }
+.qv-leaving .qv-panel { opacity: 0; transform: translateY(6px) scale(0.98); }
+.qv-glyph {
+  display: grid; place-items: center; width: 32px; height: 32px; flex: none;
+  color: var(--color-pixel-on); background: var(--color-well);
+  box-shadow: inset 0 0 0 1px var(--color-edge);
+  clip-path: polygon(0 2px, 2px 2px, 2px 0, calc(100% - 2px) 0, calc(100% - 2px) 2px, 100% 2px, 100% calc(100% - 2px), calc(100% - 2px) calc(100% - 2px), calc(100% - 2px) 100%, 2px 100%, 2px calc(100% - 2px), 0 calc(100% - 2px));
+}
+.qv-body { background: var(--color-ground-raised); }
+.qv-side {
+  display: none; place-items: center; width: 40px; height: 72px; flex: none; margin: 0 12px;
+  color: var(--color-pixel-mid); background: rgba(14, 14, 14, 0.8);
+  box-shadow: inset 0 0 0 1px var(--color-edge);
+  clip-path: polygon(0 2px, 2px 2px, 2px 0, calc(100% - 2px) 0, calc(100% - 2px) 2px, 100% 2px, 100% calc(100% - 2px), calc(100% - 2px) calc(100% - 2px), calc(100% - 2px) 100%, 2px 100%, 2px calc(100% - 2px), 0 calc(100% - 2px));
+  transition: color 160ms var(--ease-out), background-color 160ms var(--ease-out), transform 120ms var(--ease-out);
+  animation: ov-fade 400ms var(--ease-out) 200ms both;
+}
+.qv-side:hover { color: var(--color-ground); background: var(--color-pixel-on); }
+.qv-side:active { transform: scale(0.95); }
+@media (min-width: 1024px) { .qv-side { display: grid; } }
+@media (prefers-reduced-motion: reduce) {
+  .qv-backdrop, .qv-panel, .qv-side { animation: none !important; transition: none !important; }
+}
+
+/* Quick View as its own desktop window: the panel fills the window edge to
+   edge. Windows draws the shadow, rounded corners and border natively, so the
+   panel draws none (a CSS shadow inside the window would be clipped). */
+html.qv-window, html.qv-window body { background: var(--color-ground) !important; overflow: hidden; }
+html.qv-window body::before { display: none; }
+.qv-standalone { background: var(--color-ground); transition: opacity 160ms var(--ease-out); }
+.qv-standalone .qv-panel { border-radius: 0; box-shadow: none; animation: qv-fade-in 200ms var(--ease-out) both; }
+.qv-standalone.qv-leaving .qv-panel { transform: none; }
+@keyframes qv-fade-in { from { opacity: 0; } to { opacity: 1; } }
+
+/* Recent view rows */
+.recent-row {
+  display: flex; align-items: center; gap: 12px; width: 100%; padding: 10px 8px; text-align: left;
+  transition: background-color 160ms var(--ease-out);
+}
+.recent-row:hover { background: rgba(242, 242, 237, 0.04); }
+.recent-row:focus-visible { outline: 2px solid var(--color-pixel-on); outline-offset: -2px; }
+.recent-grid { display: grid; grid-template-columns: 14px minmax(0, 1fr); gap: 12px; align-items: center; }
+@media (min-width: 768px) { .recent-grid { grid-template-columns: 14px minmax(0, 1fr) 120px 120px 80px; } }
+.pc-grid { display: grid; grid-template-columns: 14px minmax(0, 1fr); gap: 12px; align-items: center; }
+@media (min-width: 768px) { .pc-grid { grid-template-columns: 14px minmax(0, 1fr) 140px 90px; } }
+
+/* Pulse segmented bar */
+.seg-bar { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 2px; height: 6px; }
+.seg-bar i { background: var(--color-pixel-off); }
+.seg-bar i.on { background: var(--color-pixel-on); }
+.seg-bar i.mid { background: var(--color-pixel-dim); }
+
+/* Square marks: no circles anywhere in data or status */
+.rounded-full { border-radius: 2px; }

@@ -1,0 +1,37 @@
+{
+  "name": "@omniview/web",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --port 5173",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --port 4173",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@omniview/config": "workspace:*",
+    "@omniview/shared-types": "workspace:*",
+    "@omniview/ui": "workspace:*",
+    "@omniview/utilities": "workspace:*",
+    "@omniview/viewer-adapters": "workspace:*",
+    "@omniview/viewer-core": "workspace:*",
+    "@tauri-apps/api": "^2.12.4",
+    "jszip": "^3.10.1",
+    "lucide-react": "^0.475.0",
+    "pdfjs-dist": "^4.10.38",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "xlsx": "^0.18.5",
+    "zustand": "^5.0.3"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.0.6",
+    "@types/react": "^19.0.8",
+    "@types/react-dom": "^19.0.3",
+    "@vitejs/plugin-react": "^4.3.4",
+    "tailwindcss": "^4.0.6",
+    "typescript": "^5.7.2",
+    "vite": "^6.1.0"
+  }
+}

@@ -1,0 +1,19 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+
+confirmModulesPurge: false
+nodeLinker: hoisted
+
+allowBuilds:
+  esbuild: true
+  prisma: true
+  "@prisma/client": true
+  "@prisma/engines": true
+  canvas: true
+
+onlyBuiltDependencies:
+  - esbuild
+  - prisma
+  - "@prisma/client"
+  - "@prisma/engines"

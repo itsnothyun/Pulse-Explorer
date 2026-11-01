@@ -1,0 +1,72 @@
+# ==============================================================================
+# OmniView — Hardened Non-Root Conversion Worker Dockerfile
+# Includes LibreOffice Headless (MPL-2.0) & FFmpeg for Isolated Conversion
+# ==============================================================================
+
+FROM node:20-bookworm-slim AS builder
+
+WORKDIR /build
+
+COPY package.json ./
+COPY tsconfig.base.json ./
+COPY packages/shared-types/package.json ./packages/shared-types/
+COPY packages/utilities/package.json ./packages/utilities/
+COPY apps/worker/package.json ./apps/worker/
+
+RUN npm install
+
+COPY packages/shared-types ./packages/shared-types
+COPY packages/utilities ./packages/utilities
+COPY apps/worker ./apps/worker
+
+RUN npm run build --workspace=@omniview/shared-types \
+    && npm run build --workspace=@omniview/utilities \
+    && npm run build --workspace=@omniview/worker
+
+# ==============================================================================
+# Runtime Stage — Minimal Hardened Image with LibreOffice Headless & FFmpeg
+# ==============================================================================
+FROM node:20-bookworm-slim AS runtime
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    NODE_ENV=production \
+    HOME=/tmp/omniview-home \
+    WORKER_SCRATCH_DIR=/tmp/omniview-work \
+    SAL_USE_VCLPLUGIN=svp
+
+# Install headless LibreOffice components, fonts, and FFmpeg without extra bloat
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libreoffice-core-nogui \
+    libreoffice-writer-nogui \
+    libreoffice-calc-nogui \
+    libreoffice-impress-nogui \
+    ffmpeg \
+    fonts-liberation \
+    fonts-dejavu-core \
+    fonts-noto-core \
+    ca-certificates \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+# Create unprivileged user & group (UID/GID 10001)
+RUN groupadd --gid 10001 omniview \
+    && useradd --uid 10001 --gid omniview --shell /usr/sbin/nologin --no-create-home omniview \
+    && mkdir -p /app /tmp/omniview-work /tmp/omniview-home \
+    && chown -R omniview:omniview /app /tmp/omniview-work /tmp/omniview-home
+
+WORKDIR /app
+
+COPY --from=builder --chown=omniview:omniview /build/package.json ./
+COPY --from=builder --chown=omniview:omniview /build/node_modules ./node_modules
+COPY --from=builder --chown=omniview:omniview /build/packages/shared-types ./packages/shared-types
+COPY --from=builder --chown=omniview:omniview /build/packages/utilities ./packages/utilities
+COPY --from=builder --chown=omniview:omniview /build/apps/worker ./apps/worker
+
+# Verify headless binaries are present and callable
+RUN soffice --version && ffmpeg -version
+
+USER 10001:10001
+
+# LibreOffice is always invoked by the worker via execFile with:
+# soffice --headless --norestore --nolockcheck --nodefault --nofirststartwizard -env:UserInstallation=file:///tmp/omniview-home
+CMD ["node", "apps/worker/dist/index.js"]

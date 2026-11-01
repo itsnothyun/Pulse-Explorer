@@ -1,0 +1,32 @@
+{
+  "name": "omniview",
+  "version": "1.0.0",
+  "private": true,
+  "description": "OmniView — Production-Quality Universal File & Document Viewer",
+  "packageManager": "pnpm@11.24.0",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @omniview/web dev",
+    "desktop": "node apps/desktop/desktop-launcher.mjs",
+    "desktop:tauri": "pnpm --filter @omniview/desktop tauri:dev",
+    "desktop:build": "pnpm --filter @omniview/web build && pnpm --filter @omniview/desktop tauri:build",
+    "dev:all": "turbo run dev",
+    "dev:api": "pnpm --filter @omniview/api dev",
+    "dev:worker": "pnpm --filter @omniview/worker dev",
+    "build": "turbo run build",
+    "typecheck": "turbo run typecheck",
+    "test": "vitest run",
+    "test:unit": "vitest run tests/integration",
+    "test:e2e": "playwright test",
+    "fixtures:generate": "node tests/fixtures/generate-fixtures.mjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.50.0",
+    "@types/node": "^22.10.0",
+    "turbo": "^2.3.0",
+    "typescript": "^5.7.2",
+    "vitest": "^3.0.0"
+  }
+}

@@ -1,0 +1,237 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String          @id @default(uuid())
+  email         String          @unique
+  displayName   String
+  avatarUrl     String?
+  preferences   Json            @default("{}")
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  files         File[]
+  folders       Folder[]
+  sessions      ViewerSession[]
+  bookmarks     Bookmark[]
+  annotations   Annotation[]
+  auditLogs     AuditLog[]
+
+  @@index([email])
+}
+
+model Folder {
+  id            String          @id @default(uuid())
+  userId        String
+  name          String
+  parentId      String?
+  color         String?         @default("#6366f1")
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  user          User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  parent        Folder?         @relation("FolderHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
+  children      Folder[]        @relation("FolderHierarchy")
+  files         File[]
+
+  @@index([userId])
+  @@index([parentId])
+}
+
+model File {
+  id                     String            @id @default(uuid())
+  userId                 String
+  folderId               String?
+  originalName           String
+  sanitizedName          String
+  extension              String
+  declaredMimeType       String
+  detectedMimeType       String
+  category               String
+  sizeBytes              BigInt
+  checksum               String
+  storageKey             String
+  importSource           String            @default("local-picker")
+  status                 String            @default("ready")
+  isFavorite             Boolean           @default(false)
+  isTrashed              Boolean           @default(false)
+  isEncrypted            Boolean           @default(false)
+  hasMacrosWarning       Boolean           @default(false)
+  isSensitiveEnv         Boolean           @default(false)
+  magicSignatureHex      String?
+  conversionFidelityNote String?
+  errorReason            String?
+  metadata               Json              @default("{}")
+  createdAt              DateTime          @default(now())
+  lastModified           DateTime          @updatedAt
+
+  user                   User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  folder                 Folder?           @relation(fields: [folderId], references: [id], onDelete: SetNull)
+  versions               FileVersion[]
+  previewArtifacts       PreviewArtifact[]
+  sessions               ViewerSession[]
+  bookmarks              Bookmark[]
+  annotations            Annotation[]
+  conversionJobs         ConversionJob[]
+  auditLogs              AuditLog[]
+
+  @@index([userId])
+  @@index([folderId])
+  @@index([checksum])
+  @@index([category])
+  @@index([isTrashed, isFavorite])
+}
+
+model FileVersion {
+  id                String    @id @default(uuid())
+  fileId            String
+  versionNumber     Int
+  checksum          String
+  sizeBytes         BigInt
+  storageKey        String
+  detectedMimeType  String
+  changelogNote     String?
+  createdAt         DateTime  @default(now())
+
+  file              File      @relation(fields: [fileId], references: [id], onDelete: Cascade)
+
+  @@unique([fileId, versionNumber])
+  @@index([fileId])
+  @@index([checksum])
+}
+
+model PreviewArtifact {
+  id                String    @id @default(uuid())
+  fileId            String
+  fileChecksum      String
+  converterName     String
+  converterVersion  String
+  cacheKey          String    @unique
+  artifactFormat    String
+  mimeType          String
+  sizeBytes         BigInt
+  storageKey        String
+  pageCount         Int?
+  fidelityWarning   String?
+  metadata          Json      @default("{}")
+  createdAt         DateTime  @default(now())
+  expiresAt         DateTime?
+
+  file              File      @relation(fields: [fileId], references: [id], onDelete: Cascade)
+
+  @@index([fileId, fileChecksum])
+  @@index([cacheKey])
+}
+
+model ViewerSession {
+  id                String    @id @default(uuid())
+  userId            String
+  fileId            String
+  fileChecksum      String
+  adapterId         String
+  currentPage       Int       @default(1)
+  totalPages        Int       @default(1)
+  zoom              Float     @default(1.0)
+  fitMode           String    @default("fit-width")
+  rotation          Int       @default(0)
+  readingMode       String    @default("print-layout")
+  activeSheet       String?
+  ebookTheme        String?   @default("light")
+  scrollTop         Float     @default(0)
+  scrollLeft        Float     @default(0)
+  lastOpenedAt      DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  file              File      @relation(fields: [fileId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, fileId])
+  @@index([userId])
+  @@index([fileId])
+}
+
+model Bookmark {
+  id                String    @id @default(uuid())
+  userId            String
+  fileId            String
+  fileChecksum      String
+  position          String
+  label             String
+  createdAt         DateTime  @default(now())
+
+  user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  file              File      @relation(fields: [fileId], references: [id], onDelete: Cascade)
+
+  @@index([fileId, fileChecksum])
+  @@index([userId])
+}
+
+model Annotation {
+  id                String    @id @default(uuid())
+  userId            String
+  fileId            String
+  fileChecksum      String
+  pageNumber        Int
+  type              String
+  color             String
+  rect              Json?
+  points            Json?
+  selectedText      String?
+  comment           String?
+  author            String
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  file              File      @relation(fields: [fileId], references: [id], onDelete: Cascade)
+
+  @@index([fileId, fileChecksum])
+  @@index([userId])
+}
+
+model ConversionJob {
+  id                String    @id @default(uuid())
+  fileId            String
+  fileChecksum      String
+  sourceFormat      String
+  targetFormat      String
+  converterName     String
+  status            String    @default("queued")
+  progress          Int       @default(0)
+  cacheKey          String?
+  fidelityWarning   String?
+  errorMessage      String?
+  startedAt         DateTime  @default(now())
+  completedAt       DateTime?
+
+  file              File      @relation(fields: [fileId], references: [id], onDelete: Cascade)
+
+  @@index([fileId, fileChecksum])
+  @@index([status])
+}
+
+model AuditLog {
+  id                String    @id @default(uuid())
+  userId            String?
+  fileId            String?
+  action            String
+  resourceType      String
+  resourceId        String?
+  ipAddress         String?
+  userAgent         String?
+  details           Json      @default("{}")
+  createdAt         DateTime  @default(now())
+
+  user              User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+  file              File?     @relation(fields: [fileId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([fileId])
+  @@index([action, createdAt])
+}

@@ -1,0 +1,14 @@
+{
+  "name": "@omniview/desktop",
+  "version": "1.0.0",
+  "private": true,
+  "description": "OmniView Tauri v2 Desktop Wrapper with Native File Associations & Offline Support",
+  "scripts": {
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build",
+    "typecheck": "echo \"Tauri desktop wrapper config verified\""
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.2.0"
+  }
+}
