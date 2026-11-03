@@ -401,7 +401,6 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({ file, tab, buffer }) => {
           }`}
         >
           {pagesToDisplay.map((pageNum) => {
-            const pageText = pageTexts.find((p) => p.pageNumber === pageNum)?.text ?? '';
             const pageAnnotations = annotations.filter(
               (a) => a.pageNumber === pageNum && a.fileChecksum === file.checksum
             );
@@ -415,7 +414,6 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({ file, tab, buffer }) => {
                 zoom={tab.zoom}
                 rotation={tab.rotation}
                 searchQuery={tab.searchQuery}
-                extractedText={pageText}
                 annotations={pageAnnotations}
                 showAnnotations={tab.showAnnotations}
                 isBookmarked={isBookmarked}
@@ -479,7 +477,6 @@ interface PDFPageSurfaceProps {
   zoom: number;
   rotation: number;
   searchQuery: string;
-  extractedText: string;
   annotations: DocumentAnnotation[];
   showAnnotations: boolean;
   isBookmarked: boolean;
@@ -496,7 +493,6 @@ const PDFPageSurface: React.FC<PDFPageSurfaceProps> = ({
   zoom,
   rotation,
   searchQuery,
-  extractedText,
   annotations,
   showAnnotations,
   isBookmarked,
@@ -543,24 +539,49 @@ const PDFPageSurface: React.FC<PDFPageSurfaceProps> = ({
     };
   }, [pdfDoc, pageNumber, scale, rotation]);
 
-  const highlightTextMatches = (text: string, query: string) => {
-    if (!query.trim()) return text;
-    const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const parts = text.split(new RegExp(`(${escaped})`, 'gi'));
-    return parts.map((part, i) =>
-      part.toLowerCase() === query.toLowerCase() ? (
-        <mark
-          key={i}
-          className="bg-amber-300 text-slate-950 font-semibold px-0.5 rounded"
-        >
-          {part}
-        </mark>
-      ) : (
-        part
-      )
-    );
-  };
+  // Invisible, selectable text layer lined up with the canvas. Copy and search work;
+  // nothing is drawn twice.
+  const textRef = useRef<HTMLDivElement | null>(null);
+  const [textVersion, setTextVersion] = useState(0);
 
+  useEffect(() => {
+    let layer: pdfjsLib.TextLayer | null = null;
+    let cancelled = false;
+    const host = textRef.current;
+    if (!pdfDoc || !host) return;
+    void (async () => {
+      try {
+        const page = await pdfDoc.getPage(pageNumber);
+        if (cancelled) return;
+        const textScale = baseWidth / page.getViewport({ scale: 1, rotation }).width;
+        host.replaceChildren();
+        host.style.setProperty('--scale-factor', String(textScale));
+        layer = new pdfjsLib.TextLayer({
+          textContentSource: page.streamTextContent(),
+          container: host,
+          viewport: page.getViewport({ scale: textScale, rotation }),
+        });
+        await layer.render();
+        if (!cancelled) setTextVersion((v) => v + 1);
+      } catch {
+        // A cancelled render leaves a partial layer that the next render replaces.
+      }
+    })();
+    return () => {
+      cancelled = true;
+      layer?.cancel();
+    };
+  }, [pdfDoc, pageNumber, baseWidth, rotation]);
+
+  // Search hits: tint the matching text runs.
+  useEffect(() => {
+    const host = textRef.current;
+    if (!host) return;
+    const q = searchQuery.trim().toLowerCase();
+    host.querySelectorAll<HTMLElement>('span').forEach((span) => {
+      span.classList.toggle('pdf-hit', q.length > 0 && (span.textContent ?? '').toLowerCase().includes(q));
+    });
+  }, [searchQuery, textVersion]);
   return (
     <div
       data-testid={`pdf-page-${pageNumber}`}
@@ -580,32 +601,25 @@ const PDFPageSurface: React.FC<PDFPageSurfaceProps> = ({
         className="w-full h-auto block pointer-events-none"
       />
 
-      {/* Accessible & Selectable Text Layer Overlay (also ensures search highlights are visible) */}
-      <div className="p-8 text-xs leading-relaxed text-slate-800/90 font-sans selectable-text">
-        <div className="flex items-center justify-between border-b border-slate-200 pb-2 mb-3 text-[11px] text-slate-500">
-          <span>
-            PDF Page {pageNumber} • Zoom {zoom}%
-          </span>
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              onToggleBookmark();
-            }}
-            className="flex items-center gap-1 px-2 py-0.5 rounded hover:bg-slate-100 text-slate-600"
-            title="Bookmark this page"
-          >
-            <Bookmark
-              className={`w-3.5 h-3.5 ${
-                isBookmarked ? 'text-amber-500 fill-amber-500' : 'text-slate-400'
-              }`}
-            />
-            <span>{isBookmarked ? 'Bookmarked' : 'Bookmark'}</span>
-          </button>
-        </div>
-        <p className="whitespace-pre-wrap">{highlightTextMatches(extractedText, searchQuery)}</p>
-      </div>
+      {/* Selectable text, invisible over the rendered page */}
+      <div ref={textRef} className="pdf-text-layer" aria-label={`Page ${pageNumber} text`} />
 
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          onToggleBookmark();
+        }}
+        onMouseDown={(e) => e.stopPropagation()}
+        className={`absolute top-2 right-2 z-10 p-1.5 rounded bg-white/85 shadow hover:bg-white transition-opacity ${
+          isBookmarked ? 'opacity-100' : 'opacity-0 hover:opacity-100 focus-visible:opacity-100'
+        }`}
+        title={isBookmarked ? 'Remove bookmark' : 'Bookmark this page'}
+        aria-label={isBookmarked ? `Remove bookmark from page ${pageNumber}` : `Bookmark page ${pageNumber}`}
+        aria-pressed={isBookmarked}
+      >
+        <Bookmark className={`w-4 h-4 ${isBookmarked ? 'text-amber-500 fill-amber-500' : 'text-slate-500'}`} />
+      </button>
       {/* Normalized Coordinate Annotation Overlay */}
       {showAnnotations && (
         <div className="absolute inset-0 pointer-events-none">

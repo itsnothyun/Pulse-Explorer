@@ -594,3 +594,9 @@ html.qv-window body::before { display: none; }
 
 /* Square marks: no circles anywhere in data or status */
 .rounded-full { border-radius: 2px; }
+
+/* PDF text layer: real text positioned over the canvas, invisible but selectable. */
+.pdf-text-layer { position: absolute; inset: 0; overflow: hidden; line-height: 1; text-align: initial; opacity: 1; z-index: 1; }
+.pdf-text-layer span, .pdf-text-layer br { color: transparent; position: absolute; white-space: pre; cursor: text; transform-origin: 0% 0%; }
+.pdf-text-layer ::selection { background: rgba(59, 130, 246, 0.35); }
+.pdf-text-layer .pdf-hit { background: rgba(252, 211, 77, 0.55); border-radius: 2px; }
