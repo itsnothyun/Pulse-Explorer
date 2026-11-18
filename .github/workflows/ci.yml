@@ -1,0 +1,20 @@
+name: CI
+
+# Not on every push to main: the work goes straight to main in many small commits a day, the whole workspace's tests are run on the
+# developer's PC before a push, and a run for each commit only sent mail. It runs for pull requests (contributors' changes) and
+# by hand (Actions > CI > Run workflow).
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Test
+        run: cargo test --workspace
+      - name: Release build
+        run: cargo build --release -p rf-app -p rf-dialog

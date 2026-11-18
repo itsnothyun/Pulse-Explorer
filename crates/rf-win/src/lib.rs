@@ -1,0 +1,140 @@
+//! rf-win: Windows platform layer (fast enumeration, Shell COM, icons/thumbnails, file ops, watcher).
+//!
+//! Every function here may block (disk, network, shell extensions). Never call them on the UI thread.
+
+pub mod accent;
+pub mod activate;
+pub mod appvolume;
+pub mod apppkg;
+pub mod apps;
+pub mod datefmt;
+pub mod share;
+pub mod apps_direct;
+pub mod bench;
+pub mod cert;
+pub mod clipboard;
+pub mod vfiles;
+pub mod complete;
+pub mod ctxmenu;
+pub mod default_fm;
+pub mod desktop;
+pub mod design;
+pub mod dialog_reg;
+pub mod dialogs;
+pub mod diskusage;
+pub mod elf;
+pub mod dnd;
+pub mod dock;
+pub mod docs;
+pub mod drives;
+pub mod encoding;
+pub mod engine_guard;
+pub mod fastcopy;
+pub mod fastdelete;
+pub mod fileops;
+pub mod foldersize;
+pub mod sysparams;
+pub mod git;
+pub mod glass;
+pub mod hotkey;
+pub mod hash;
+pub mod indexer;
+pub mod inputlang;
+pub mod known;
+pub mod libraries;
+pub mod ftp;
+pub mod keys;
+pub mod look;
+pub mod listing;
+pub mod localized;
+pub mod nameindex;
+pub mod organize;
+pub mod osver;
+pub mod openrules;
+pub mod ownfolder;
+pub mod taskbar_hide;
+pub mod taskbar_progress;
+pub mod usn;
+pub mod network;
+pub mod pe;
+pub mod security;
+pub mod signature;
+pub mod compat;
+pub mod folder_custom;
+pub mod fileactions;
+pub mod fileinfo;
+pub mod journal;
+pub mod editors;
+pub mod jumplist;
+pub mod jumplists;
+pub mod wsearch;
+pub mod preview_host;
+pub mod props;
+pub mod propcols;
+pub mod recycle;
+pub mod recycle_settings;
+pub mod search;
+pub mod runcmd;
+pub mod runfind;
+pub mod settingscat;
+pub mod shell;
+pub mod shellfolder;
+pub mod sysstatus;
+pub mod shortcut;
+pub mod startup;
+pub mod single_instance;
+pub mod snip;
+pub mod handover;
+pub mod shell_window;
+pub mod shellhost;
+pub mod sta;
+pub mod stayup;
+pub mod switcher;
+pub mod removal;
+pub mod pane_picture;
+pub mod rotate;
+pub mod thumbs;
+pub mod tray;
+pub mod tray_wire;
+pub mod trayhost;
+pub mod watch;
+pub mod weather;
+// the weather from Windows' location service instead of a typed city (see the module)
+pub mod weather_location;
+pub mod window;
+pub mod winkey;
+pub mod volume;
+pub mod tasklist;
+// (not called `notify`: that is the name of a crate this one uses)
+pub mod sound;
+pub mod toast_post;
+pub mod toasts;
+pub mod tree_watch;
+pub mod wide;
+pub mod workfit;
+
+/// Held by tests that measure short times and by tests that load every core (the glass tests draw with the software renderer, which
+/// uses them all), so the two kinds never run at the same moment: with both in one parallel run the keyboard hook's "under one
+/// millisecond" test failed in half of the runs.
+#[cfg(test)]
+pub(crate) static TEST_QUIET: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+pub use drives::{Drive, DriveKind, list_drives};
+pub use known::{KnownFolder, known_folders};
+pub use listing::{ListError, list_dir, stat_entry};
+
+/// Milliseconds since this process was created (start-up timing).
+pub fn process_age_ms() -> u64 {
+    use windows::Win32::Foundation::FILETIME;
+    use windows::Win32::System::SystemInformation::GetSystemTimePreciseAsFileTime;
+    use windows::Win32::System::Threading::{GetCurrentProcess, GetProcessTimes};
+    let (mut created, mut a, mut b, mut c) = (FILETIME::default(), FILETIME::default(), FILETIME::default(), FILETIME::default());
+    unsafe {
+        if GetProcessTimes(GetCurrentProcess(), &mut created, &mut a, &mut b, &mut c).is_err() {
+            return 0;
+        }
+        let now = GetSystemTimePreciseAsFileTime();
+        let t = |f: FILETIME| ((f.dwHighDateTime as u64) << 32) | f.dwLowDateTime as u64;
+        t(now).saturating_sub(t(created)) / 10_000
+    }
+}
