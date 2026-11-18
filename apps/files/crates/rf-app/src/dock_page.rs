@@ -1,0 +1,830 @@
+//! Settings → Dock: the dock's settings on a page of their own.
+//!
+//! THE ONE SWITCH. `dock_enabled` starts the dock with everything it needs: Start, search and the control centre, our desktop, the
+//! programs' tray icons, Windows' taskbar hidden while it runs, the Windows key and Alt+Tab (`dock/parts.rs` is the rule). The parts
+//! have no switches here any more; their old settings stay in the file as overrides, and the page says in one line which of them the
+//! file holds off, with a button that clears them. A part that could not start is told under the switch (`dock/parts_status.rs`).
+//!
+//! The page is built from ONE list, [`entries`]:
+//! every `dock_*` setting that has a control, with the section it sits in, what it needs, and the texts. The page
+//! draws that list and nothing else, and the Settings search reads the same cards (every card builder notes its title and
+//! description for the index), so the page and the index cannot drift apart. The list itself is plain data and is tested without a
+//! window: no setting left out, none twice, every switch wired to its own field, the dependency on the dock.
+
+use gpui_kit::assets::IconName as L;
+use gpui_kit::component::{h_flex, v_flex};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
+
+use crate::dock::{parts, parts_status};
+use crate::dock::size_pref::DockSizePref;
+use crate::settings::{self, DockAppsWhere, DockMagnify, Settings};
+use crate::settings_view::{button, card_body, dropdown, section, shell, sw, switch};
+use crate::t;
+use crate::theme::Palette;
+
+/// The groups of the page, in the order they are drawn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Section {
+    General,
+    Left,
+    Middle,
+    Right,
+}
+
+impl Section {
+    pub(crate) const ALL: [Section; 4] = [Section::General, Section::Left, Section::Middle, Section::Right];
+
+    pub(crate) fn title(self) -> &'static str {
+        match self {
+            Section::General => t!("GENEL"),
+            Section::Left => t!("SOL ADA"),
+            Section::Middle => t!("ORTA ADA"),
+            Section::Right => t!("SAĞ ADA"),
+        }
+    }
+}
+
+/// What a setting needs before it does anything.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Needs {
+    /// Nothing: it is the switch that starts the dock.
+    Nothing,
+    /// The dock runs: the islands, the panels and the shell host are all one process, started only by the dock switch.
+    DockOn,
+}
+
+impl Needs {
+    /// Whether the control can be used with these settings.
+    pub(crate) fn met(self, s: &Settings) -> bool {
+        match self {
+            Needs::Nothing => true,
+            Needs::DockOn => s.dock_enabled,
+        }
+    }
+
+    /// The one line shown under a control that cannot be used yet.
+    pub(crate) fn reason(self) -> &'static str {
+        match self {
+            Needs::Nothing => "",
+            Needs::DockOn => t!("Dock kapalı: bu ayar yalnızca Dock çalışırken işe yarar. Açmak için sayfanın başındaki Dock anahtarını kullanın."),
+        }
+    }
+}
+
+/// The control of an entry, with how it reads and writes its own field (the tests check that it touches that field and no other).
+#[derive(Clone, Copy)]
+pub(crate) enum Control {
+    /// A switch on a boolean setting.
+    Switch(fn(&Settings) -> bool, fn(&mut Settings, bool)),
+    /// The size slider (`dock::size_slider`, which writes the field itself): the setter is what ties the entry to its field in the tests.
+    Size(fn(&Settings) -> DockSizePref, #[cfg_attr(not(test), allow(dead_code))] fn(&mut Settings, DockSizePref)),
+    Magnify(fn(&Settings) -> DockMagnify, fn(&mut Settings, DockMagnify)),
+    /// Which dock shows which running app (a dropdown).
+    AppsWhere(fn(&Settings) -> DockAppsWhere, fn(&mut Settings, DockAppsWhere)),
+    /// The left island's search (a dropdown).
+    Search(fn(&Settings) -> crate::settings::DockSearch, fn(&mut Settings, crate::settings::DockSearch)),
+    City(fn(&Settings) -> &str, fn(&mut Settings, String)),
+}
+
+/// How an entry is drawn with the current settings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RowState {
+    /// Fully usable.
+    Live,
+    /// The dock is off: dimmed, nothing to click, one line says why.
+    Inert,
+}
+
+/// One setting of the page.
+#[derive(Clone, Copy)]
+pub(crate) struct Entry {
+    /// The control's element id (kept as it was on the old page).
+    pub id: &'static str,
+    /// The field of `Settings` it changes (only the tests read it: they compare these with the fields the struct really has).
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub field: &'static str,
+    pub section: Section,
+    pub needs: Needs,
+    pub icon: L,
+    pub title: &'static str,
+    /// The description; none for the city, whose line shows the city (see [`city_line`]).
+    pub desc: Option<&'static str>,
+    pub control: Control,
+}
+
+impl Entry {
+    /// Whether the control works or is inert with these settings.
+    pub(crate) fn state(&self, s: &Settings) -> RowState {
+        if self.needs.met(s) { RowState::Live } else { RowState::Inert }
+    }
+}
+
+/// What the size slider does, under its title.
+pub(crate) fn size_desc() -> &'static str {
+    t!("Dock'un tamamı kaydırıcıyla seçtiğiniz oranda büyür ya da küçülür: adalar, simgeler, arama alanı, saat, tepsi simgeleri ve aralıklar. %100, Dock'un her zamanki boyutudur. Kaydırırken çalışan Dock sizinle birlikte değişir; ekranda ayrılan şerit ve simgelerin keskinliği bıraktığınızda güncellenir.")
+}
+
+/// The intro at the top of the page.
+pub(crate) fn intro() -> &'static str {
+    t!("Dock, ekranın altındaki üç yüzen adadır: Başlat ve arama, uygulamalar, sistem simgeleri ve saat. Tek anahtarla açılır ve gereken her şeyi birlikte getirir. Deneyseldir ve varsayılan olarak kapalıdır.")
+}
+
+/// Every dock setting that has a control, in the order of the page.
+pub(crate) fn entries() -> Vec<Entry> {
+    use Section::*;
+    #[allow(clippy::too_many_arguments)]
+    fn e(
+        id: &'static str,
+        field: &'static str,
+        section: Section,
+        needs: Needs,
+        icon: L,
+        title: &'static str,
+        desc: Option<&'static str>,
+        control: Control,
+    ) -> Entry {
+        Entry { id, field, section, needs, icon, title, desc, control }
+    }
+    let dock = Needs::DockOn;
+    vec![
+        // ---- GENEL
+        e(
+            "dock-show",
+            "dock_enabled",
+            General,
+            Needs::Nothing,
+            L::PanelBottom,
+            parts::switch_title(),
+            Some(parts::switch_description()),
+            Control::Switch(|s| s.dock_enabled, |s, v| s.dock_enabled = v),
+        ),
+        e(
+            "dock-reserve",
+            "dock_reserve",
+            General,
+            dock,
+            L::AppWindow,
+            t!("Pencereler dock'un altına girmesin"),
+            Some(t!("Büyütülmüş pencereler dock'un üstünde durur. Kapalıyken dock yalnızca pencerelerin üstünde yüzer.")),
+            Control::Switch(|s| s.dock_reserve, |s, v| s.dock_reserve = v),
+        ),
+        e(
+            "dock-size",
+            "dock_size",
+            General,
+            dock,
+            L::Maximize2,
+            t!("Dock boyutu"),
+            Some(size_desc()),
+            Control::Size(|s| s.dock_size, |s, v| s.dock_size = v),
+        ),
+        e(
+            "dock-side-tall",
+            "dock_side_tall",
+            General,
+            dock,
+            L::ChevronsUpDown,
+            t!("Yan adalar Dock kadar yüksek olsun"),
+            Some(t!("Sol ve sağ ada orta adayla aynı yükseklikte çizilir. Kapalıyken daha alçaktırlar. Dock bir pencere büyütüldüğü için inceldiğinde üçü de ince olur.")),
+            Control::Switch(|s| s.dock_side_tall, |s, v| s.dock_side_tall = v),
+        ),
+        e(
+            "dock-tray-compact",
+            "dock_tray_compact",
+            General,
+            dock,
+            L::LayoutGrid,
+            t!("Sıkışık tepsi"),
+            Some(t!("Sağ adadaki tepsi simgeleri birbirine daha yakın durur; aynı yere daha çok simge sığar.")),
+            Control::Switch(|s| s.dock_tray_compact, |s, v| s.dock_tray_compact = v),
+        ),
+        e(
+            "dock-all-monitors",
+            "dock_all_monitors",
+            General,
+            dock,
+            L::Monitor,
+            t!("Dock'u her ekranda göster"),
+            Some(t!("Birden çok ekranınız varsa her ekranın altında bir dock bulunur: Başlat logosu ve arama, uygulamalar, saat ve zil. Hava durumu, tepsi simgeleri, ağ ve ses düğmeleri yalnızca ana ekrandaki dock'ta kalır. Ekran dar kalırsa önce arama alanı düğmeye dönüşür, sonra zil gider. Kapalıyken ya da tek ekranda dock yalnızca ana ekrandadır.")),
+            Control::Switch(|s| s.dock_all_monitors, |s, v| s.dock_all_monitors = v),
+        ),
+        e(
+            "dock-magnify",
+            "dock_magnify",
+            General,
+            dock,
+            L::ZoomIn,
+            t!("Simge büyütme"),
+            Some(t!("Fare dock'un üzerindeyken simgeler Mac'teki gibi büyür: Hafif 1,25 katına, Tam 1,55 katına kadar.")),
+            Control::Magnify(|s| s.dock_magnify, |s, v| s.dock_magnify = v),
+        ),
+        e(
+            "dock-scroll-volume",
+            "dock_scroll_volume",
+            General,
+            dock,
+            L::Volume1,
+            t!("Simge üzerinde kaydırarak uygulamanın sesini ayarla"),
+            Some(t!("Çalışan bir uygulamanın Dock simgesi üzerinde fare tekerleğini çevirmek yalnızca o uygulamanın sesini açar ya da kısar; düzey simgenin üzerinde kısa süre gösterilir. Henüz ses çalmamış bir uygulamada değişen bir şey olmaz.")),
+            Control::Switch(|s| s.dock_scroll_volume, |s, v| s.dock_scroll_volume = v),
+        ),
+        // (the name of the setting is still `dock_start_grow`: it was the Start panel's, and now every panel's)
+        e(
+            "dock-start-grow",
+            "dock_start_grow",
+            General,
+            dock,
+            L::Sparkles,
+            t!("Paneller adalardan büyüyerek açılsın"),
+            Some(t!("Başlat, denetim merkezi, takvim, bildirimler ve gizli simgeler paneli açılırken ilgili cam ada yukarı büyüyüp panele dönüşür, kapanırken adaya geri küçülür. Sağ adanın simgeleri, saati ve zili panelin alt satırı olarak yerinde kalır ve çalışır: açık panelin düğmesine basmak onu kapatır, satırdaki başka bir düğmeye basmak o panele geçirir (önceki küçülür, yenisi büyür). Kapalıyken paneller eskisi gibi adaların üstünde ayrı pencereler olarak açılır. Animasyonlar kapalıysa tek karede açılır.")),
+            Control::Switch(|s| s.dock_start_grow, |s, v| s.dock_start_grow = v),
+        ),
+        // ---- SOL ADA
+        e(
+            "dock-own-start",
+            "dock_own_start",
+            Left,
+            dock,
+            L::Search,
+            t!("rustyfiles Başlat menüsünü kullan"),
+            Some(t!("Dock'taki logo ve arama alanı Windows'un Başlat menüsü yerine rustyfiles'ın kendi panelini açar. Kapalıyken Windows'un Başlat menüsü ve hızlı arama açılır.")),
+            Control::Switch(|s| s.dock_own_start, |s, v| s.dock_own_start = v),
+        ),
+        e(
+            "dock-start-recommended",
+            "dock_start_recommended",
+            Left,
+            dock,
+            L::Clock,
+            t!("Başlat'ta önerilenler"),
+            Some(t!("Başlat panelinde sabitlenmiş uygulamaların altında en son açtığınız belgeler (ne zaman açıldığıyla birlikte) görünür. Kapalıyken bölüm çizilmez ve sabitlenenler o yeri kullanır.")),
+            Control::Switch(|s| s.dock_start_recommended, |s, v| s.dock_start_recommended = v),
+        ),
+        e(
+            "dock-search",
+            "dock_search",
+            Left,
+            dock,
+            L::Search,
+            t!("Arama"),
+            Some(t!("Sol adadaki arama: bir kutu, yalnızca simgesi ya da hiç. Logo Başlat'ı yine açar.")),
+            Control::Search(|s| s.dock_search, |s, v| s.dock_search = v),
+        ),
+        e(
+            "dock-search-hyper",
+            "dock_search_hypersearch",
+            Left,
+            dock,
+            L::Search,
+            t!("Arama HyperSearch'ü açar"),
+            Some(t!("Dock'taki arama kutusuna ya da simgesine tıklamak Başlat yerine HyperSearch'ü açar. Logo Başlat'ı yine açar.")),
+            Control::Switch(|s| s.dock_search_hypersearch, |s, v| s.dock_search_hypersearch = v),
+        ),
+        e("dock-city-edit", "dock_weather_city", Left, dock, L::MapPin, t!("Hava durumu şehri"), None, Control::City(|s| s.dock_weather_city.as_str(), |s, v| s.dock_weather_city = v)),
+        // ---- ORTA ADA
+        e(
+            "dock-hover-previews",
+            "dock_hover_previews",
+            Middle,
+            dock,
+            L::AppWindow,
+            t!("Simge üzerinde pencere önizlemesi"),
+            Some(t!("Dock'taki çalışan bir uygulamanın simgesinde fareyi bir an bekletince, o uygulamanın pencereleri canlı küçük resimlerle üstte görünür: pencereye tıklayınca öne gelir, x pencereyi kapatmasını ister.")),
+            Control::Switch(|s| s.dock_hover_previews, |s, v| s.dock_hover_previews = v),
+        ),
+        e(
+            "dock-app-menu",
+            "dock_app_menu",
+            Middle,
+            dock,
+            L::Pin,
+            t!("Simge sağ tık menüsü"),
+            Some(t!("Dock'taki bir uygulamanın simgesine sağ tıklayınca rustyfiles'ın kendi menüsü açılır: uygulamanın adı, Dock'a sabitle / Dock'tan kaldır ve pencereleri kapat. Dock'un sabitleme listesi kendisinindir; Windows'un görev çubuğu sabitlerine yazılmaz.")),
+            Control::Switch(|s| s.dock_app_menu, |s, v| s.dock_app_menu = v),
+        ),
+        e(
+            "dock-thin-maximized",
+            "dock_thin_when_maximized",
+            Middle,
+            dock,
+            L::PanelBottom,
+            t!("Pencere büyütüldüğünde dock'u incelt"),
+            Some(t!("Ekranda büyütülmüş bir pencere varken orta ada yan adalar kadar inceleşir ve pencere o kadar yer kazanır; fareyi yaklaştırınca eski boyutuna döner.")),
+            Control::Switch(|s| s.dock_thin_when_maximized, |s, v| s.dock_thin_when_maximized = v),
+        ),
+        e(
+            "dock-apps-where",
+            "dock_apps_where",
+            Middle,
+            dock,
+            L::AppWindow,
+            t!("Uygulamalar hangi ekranda görünsün"),
+            Some(t!("Her ekranda hepsi: her dock sabitlenmiş uygulamaları ve çalışan tüm uygulamaları gösterir. Pencerenin olduğu ekranda: sabitlenmiş uygulamalar her dock'ta durur; sabitlenmemiş çalışan bir uygulama yalnızca penceresinin olduğu ekranın dock'unda görünür, sabitlenmiş bir uygulamanın çalışıyor işareti de yalnızca orada olur. Bir pencere başka ekrana taşınınca uygulaması, görev listesinin bir sonraki değişiminde onunla gider. Yalnızca birden çok ekranda ve \"Dock'u her ekranda göster\" açıkken bir şey değiştirir.")),
+            Control::AppsWhere(|s| s.dock_apps_where, |s, v| s.dock_apps_where = v),
+        ),
+        // ---- SAĞ ADA
+        e(
+            "dock-own-cc",
+            "dock_own_control_centre",
+            Right,
+            dock,
+            L::Volume2,
+            t!("rustyfiles denetim merkezini kullan"),
+            Some(t!("Dock'taki ağ ve ses simgeleri Windows'un hızlı ayarları yerine rustyfiles'ın panelini açar: ses, ağ, Bluetooth, şimdi çalan, parlaklık. Kapalıyken Windows'un hızlı ayarları açılır.")),
+            Control::Switch(|s| s.dock_own_control_centre, |s, v| s.dock_own_control_centre = v),
+        ),
+        e(
+            "dock-own-cal",
+            "dock_own_calendar",
+            Right,
+            dock,
+            L::Calendar,
+            t!("rustyfiles takvimini kullan"),
+            Some(t!("Dock'taki saate tıklayınca Windows'un takvimi yerine rustyfiles'ın paneli açılır: ay, hafta numarasız gün tablosu, saniyeli saat. Kapalıyken Windows'un bildirim merkezi ve takvimi açılır.")),
+            Control::Switch(|s| s.dock_own_calendar, |s, v| s.dock_own_calendar = v),
+        ),
+        e(
+            "dock-own-notif",
+            "dock_own_notifications",
+            Right,
+            dock,
+            L::Bell,
+            t!("rustyfiles bildirim panelini kullan"),
+            Some(t!("Dock'taki zile tıklayınca Windows'un bildirim merkezi yerine rustyfiles'ın paneli açılır: diğer uygulamaların bildirimleri uygulamaya göre gruplanır, zilde bildirim varken küçük bir nokta görünür. Kapalıyken Windows'un bildirim merkezi açılır.")),
+            Control::Switch(|s| s.dock_own_notifications, |s, v| s.dock_own_notifications = v),
+        ),
+    ]
+}
+
+/// The entries of each section, in the order of the page; a section with no entry is not listed.
+pub(crate) fn grouped(all: &[Entry]) -> Vec<(Section, Vec<Entry>)> {
+    Section::ALL
+        .iter()
+        .map(|&sec| (sec, all.iter().copied().filter(|e| e.section == sec).collect::<Vec<_>>()))
+        .filter(|(_, v)| !v.is_empty())
+        .collect()
+}
+
+/// The text under the weather city: the city, or what happens without one.
+pub(crate) fn city_line(city: &str) -> String {
+    let city = city.trim();
+    if city.is_empty() { t!("Ayarlanmadı: hava durumu gösterilmez").to_string() } else { city.to_string() }
+}
+
+// ---------------------------------------------------------------- the page
+
+/// The page: the intro, then the sections. A control that needs the dock is drawn dimmed and inert, with a line that says why;
+/// it is never left out, so it is found by the search and the user sees where it is. `size_slider` is the size row's slider, built by
+/// the caller (it needs the app's focus handles); without one the row shows the value.
+pub(crate) fn page(p: &Palette, s: &Settings, size_slider: Option<AnyElement>) -> Vec<AnyElement> {
+    let mut out: Vec<AnyElement> = vec![div().pb_1().text_sm().text_color(p.text_secondary).child(intro()).into_any_element()];
+    let mut size_slider = size_slider;
+    for (sec, rows) in grouped(&entries()) {
+        out.push(section(p, sec.title()));
+        for e in rows {
+            let slider = if matches!(e.control, Control::Size(..)) { size_slider.take() } else { None };
+            out.push(row(p, s, &e, slider));
+            // the parts the file holds off, in one line with its button, right under the one switch
+            if e.field == "dock_enabled" {
+                out.extend(held_off_card(p, s));
+            }
+            // the weather from the PC's position belongs with the weather city: its card (`dock/weather_card.rs`, a switch and Windows' own
+            // permission, which an entry cannot show) follows that row directly instead of standing at the end of the page
+            if e.field == "dock_weather_city" {
+                out.extend(crate::dock::weather_card::cards(p, s));
+            }
+            // what our control centre shows: a list too, so a card of its own (`dock/cc_card.rs`) right under the switch that chooses
+            // our control centre; inert while the Dock is off or Windows' own quick settings are chosen
+            if e.field == "dock_own_control_centre" {
+                let live = Needs::DockOn.met(s) && s.dock_own_control_centre;
+                out.push(crate::dock::cc_card::card(p, s, live).into_any_element());
+            }
+            // the right island's own buttons, their order and which are shown: a list, so a card of its own (`dock/status_card.rs`) at
+            // the end of the right island's section; dimmed and inert with its line while the Dock is off, like the entries
+            if e.field == "dock_own_notifications" {
+                let live = Needs::DockOn.met(s);
+                out.push(crate::dock::status_card::card(p, s, live).when(!live, |d| d.child(note_line(p, Needs::DockOn.reason(), false))).into_any_element());
+            }
+        }
+    }
+    out
+}
+
+fn row(p: &Palette, s: &Settings, e: &Entry, slider: Option<AnyElement>) -> AnyElement {
+    let state = e.state(s);
+    let desc: Option<String> = match e.control {
+        Control::City(get, _) => Some(city_line(get(s))),
+        _ => e.desc.map(str::to_string),
+    };
+    let is_size = matches!(e.control, Control::Size(..));
+    let control = match slider {
+        Some(slider) if is_size && state != RowState::Inert => slider,
+        // (the size row without its slider, as in a test, shows the value)
+        _ if state == RowState::Inert || is_size => inert_control(p, s, e),
+        _ => live_control(p, s, e),
+    };
+    // (the card notes its title and description for the Settings search, usable or not)
+    let body = card_body(p, e.icon, e.title.into(), desc.map(Into::into), Some(control));
+    // (the opacity is the card's own: it reaches the icon, the texts and the control)
+    let body = if state == RowState::Inert { body.opacity(0.55) } else { body };
+    shell(p)
+        .child(body)
+        .when(state == RowState::Inert, |d| d.child(note_line(p, e.needs.reason(), false)))
+        // under the one switch: what the risky parts do and how they end, then a part that could not start (the others go on)
+        .when(e.field == "dock_enabled", |d| {
+            let faults = if s.dock_enabled { parts::failure_lines(&parts_status::cached()) } else { Vec::new() };
+            d.child(note_line(p, parts::keyboard_warning(), false))
+                .child(note_line(p, parts::taskbar_warning(), false))
+                .child(note_line(p, parts::untried_line(), true))
+                .children(faults.into_iter().map(|line| note_line(p, line, true)))
+        })
+        .into_any_element()
+}
+
+/// The card with the one line that names the parts the file holds off and the button that clears them (`None`: it holds none, or the
+/// switch is off). Plain elements that note nothing for the search: the switch above it is what the search finds.
+fn held_off_card(p: &Palette, s: &Settings) -> Option<AnyElement> {
+    let line = parts::held_off_line(s)?;
+    Some(
+        shell(p)
+            .child(
+                h_flex()
+                    .px_4()
+                    .py_3()
+                    .gap_4()
+                    .items_center()
+                    .child(div().flex_1().min_w_0().text_sm().text_color(p.text_secondary).child(line))
+                    .child(button("dock-parts-all-on", p, parts::clear_button(), |_, cx| settings::update(cx, parts::clear_overrides))),
+            )
+            .into_any_element(),
+    )
+}
+
+/// A small line under a card's text (aligned with it: past the icon).
+fn note_line(p: &Palette, text: impl Into<SharedString>, warning: bool) -> Div {
+    div().pl(px(50.)).pr_4().pb_3().text_xs().text_color(if warning { p.danger } else { p.text_secondary }).child(text.into())
+}
+
+fn apps_where_choices() -> Vec<(DockAppsWhere, String)> {
+    vec![(DockAppsWhere::All, t!("Her ekranda hepsi").into()), (DockAppsWhere::Window, t!("Pencerenin olduğu ekranda").into())]
+}
+
+fn search_choices() -> Vec<(crate::settings::DockSearch, String)> {
+    use crate::settings::DockSearch;
+    vec![(DockSearch::Field, t!("Arama kutusu").into()), (DockSearch::Icon, t!("Yalnızca simge").into()), (DockSearch::Hidden, t!("Gizle").into())]
+}
+
+fn magnify_choices() -> Vec<(DockMagnify, String)> {
+    vec![(DockMagnify::Off, t!("Kapalı").into()), (DockMagnify::Subtle, t!("Hafif").into()), (DockMagnify::Full, t!("Tam").into())]
+}
+
+/// The working control of an entry.
+fn live_control(p: &Palette, s: &Settings, e: &Entry) -> AnyElement {
+    match e.control {
+        Control::Switch(get, set) => sw(e.id, p, get(s), set),
+        // (the slider is built by `dock::size_slider` and handed to `page`; with none the row shows the value)
+        Control::Size(..) => inert_control(p, s, e),
+        Control::Magnify(get, set) => dropdown(e.id, p, get(s), magnify_choices(), set),
+        Control::AppsWhere(get, set) => dropdown(e.id, p, get(s), apps_where_choices(), set),
+        Control::Search(get, set) => dropdown(e.id, p, get(s), search_choices(), set),
+        Control::City(get, set) => {
+            let city = get(s).trim().to_string();
+            h_flex()
+                .gap_2()
+                .child(button(e.id, p, t!("Değiştir…"), {
+                    let city = city.clone();
+                    move |window, cx| {
+                        let ok = crate::prompt::Button::new(t!("Kaydet"), crate::prompt::Kind::Primary, move |text, _, cx| {
+                            let text = text.unwrap_or_default().trim().to_string();
+                            settings::update(cx, |s| set(s, text));
+                            Ok(())
+                        });
+                        crate::prompt::show(
+                            t!("Hava durumu şehri"),
+                            Some(t!("Dock'un sol adasında sıcaklık gösterilir (Open-Meteo). Boş bırakırsanız hava durumu gösterilmez ve ağa hiç istek gitmez.").to_string()),
+                            Some((city.clone(), t!("Şehir adı, örneğin: Erzincan").to_string())),
+                            vec![ok, crate::prompt::Button::cancel()],
+                            window,
+                            cx,
+                        );
+                    }
+                }))
+                .children((!city.is_empty()).then(|| button("dock-city-clear", p, t!("Temizle"), move |_, cx| settings::update(cx, |s| set(s, String::new())))))
+                .into_any_element()
+        }
+    }
+}
+
+/// What stands where the control would be while the dock is off: the current value, with nothing to click.
+fn inert_control(p: &Palette, s: &Settings, e: &Entry) -> AnyElement {
+    let label = |text: String| {
+        div().h(px(32.)).px_3().flex().items_center().rounded(crate::theme::RADIUS_SM).border_1().border_color(p.border).text_sm().child(text).into_any_element()
+    };
+    match e.control {
+        // over glass the same liquid switch as the live ones (a click does nothing); the card around it is dimmed
+        Control::Switch(get, _) if p.liquid => switch(e.id, p, get(s), |_, _| {}),
+        Control::Switch(get, _) => {
+            let on = get(s);
+            h_flex()
+                .gap_3()
+                .items_center()
+                .child(div().text_sm().text_color(p.text_secondary).child(if on { t!("Açık") } else { t!("Kapalı") }))
+                .child(
+                    h_flex()
+                        .w(px(40.))
+                        .h(px(20.))
+                        .px(px(3.))
+                        .items_center()
+                        .rounded_full()
+                        .border_1()
+                        .border_color(p.text_secondary)
+                        .when(on, |d| d.justify_end())
+                        .child(div().size(px(12.)).rounded_full().bg(p.text_secondary)),
+                )
+                .into_any_element()
+        }
+        Control::Size(get, _) => label(get(s).percent_text(crate::i18n::is_tr())),
+        Control::Magnify(get, _) => label(magnify_choices().into_iter().find(|(v, _)| *v == get(s)).map(|(_, l)| l).unwrap_or_default()),
+        Control::AppsWhere(get, _) => label(apps_where_choices().into_iter().find(|(v, _)| *v == get(s)).map(|(_, l)| l).unwrap_or_default()),
+        Control::Search(get, _) => label(search_choices().into_iter().find(|(v, _)| *v == get(s)).map(|(_, l)| l).unwrap_or_default()),
+        Control::City(..) => v_flex().into_any_element(),
+    }
+}
+
+/// For tests that compare texts: the interface language is one process-wide value and one test of `i18n` switches it for a few
+/// milliseconds, so a test that reads the Turkish keys runs its body again when the language was not Turkish all the way through.
+#[cfg(test)]
+pub(crate) fn while_turkish(body: impl Fn()) {
+    for _ in 0..400 {
+        if crate::i18n::is_tr() {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(&body));
+            if crate::i18n::is_tr() {
+                if let Err(e) = result {
+                    std::panic::resume_unwind(e);
+                }
+                return;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    panic!("the interface language did not settle on Turkish");
+}
+
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    // (not `super::*`: the glob of gpui_kit up there brings a `test` of its own that would shadow `#[test]`)
+    use super::{Control, Entry, Needs, RowState, Section, apps_where_choices, city_line, entries, grouped, intro, magnify_choices, search_choices, while_turkish};
+    use crate::dock::parts::{self, Part};
+    use crate::dock::size_pref::DockSizePref;
+    use crate::settings::Settings;
+
+    #[test]
+    fn ids_and_fields_are_unique() {
+        let all = entries();
+        let ids: HashSet<_> = all.iter().map(|e| e.id).collect();
+        let fields: HashSet<_> = all.iter().map(|e| e.field).collect();
+        assert_eq!(ids.len(), all.len(), "an element id is used twice");
+        assert_eq!(fields.len(), all.len(), "a setting is on the page twice");
+    }
+
+    /// The `dock_*` fields the settings struct has (and the `shell_*` ones that are not the five parts' overrides), read from its source,
+    /// so a setting added later without a place on the page fails here instead of being lost again.
+    fn struct_fields() -> HashSet<String> {
+        let overrides: Vec<&str> = Part::ALL.iter().map(|p| p.field()).collect();
+        include_str!("settings.rs")
+            .lines()
+            .filter_map(|l| {
+                let rest = l.trim_start().strip_prefix("pub ")?;
+                let name = rest.split(':').next()?.trim();
+                // (`shell_submenu` is the context menu's "Show more options" switch, nothing to do with the shell host)
+                // (the five parts' own values are overrides in the file: no switch on any page, the one switch brings them: `dock/parts.rs`)
+                // (`dock_one_switch` is the marker that the one switch's migration ran: written by the program, never shown: `settings.rs`)
+                // (`dock_weather_location` is on this page too, drawn by a card of its own right after the weather city's row: `dock/weather_card.rs`,
+                // added by `page` above; it shows Windows' own permission, which an entry cannot)
+                // (`dock_status_order` and `dock_status_hidden` are on this page too: the list of the right island's own buttons, a card of
+                // its own at the end of the right island's section, `dock/status_card.rs`, added by `page` above)
+                // (`dock_cc_hidden` is on this page too: what our control centre shows, a card of its own: `dock/cc_card.rs`)
+                let own_cards = ["dock_weather_location", "dock_status_order", "dock_status_hidden", "dock_cc_hidden"];
+                let ours = (name.starts_with("dock_") || name.starts_with("shell_")) && name != "shell_submenu" && !overrides.contains(&name) && !own_cards.contains(&name) && name != "dock_one_switch";
+                (ours && rest.contains(':') && !rest.contains('(')).then(|| name.to_string())
+            })
+            .collect()
+    }
+
+    #[test]
+    fn every_dock_setting_is_on_the_page_and_nothing_else() {
+        let on_page: HashSet<String> = entries().iter().map(|e| e.field.to_string()).collect();
+        let in_struct = struct_fields();
+        assert!(in_struct.len() >= 12, "the source scan found too little: {in_struct:?}");
+        let missing: Vec<_> = in_struct.difference(&on_page).collect();
+        let unknown: Vec<_> = on_page.difference(&in_struct).collect();
+        assert!(missing.is_empty(), "settings with no place on the Dock page: {missing:?}");
+        assert!(unknown.is_empty(), "entries for a setting that does not exist: {unknown:?}");
+    }
+
+    #[test]
+    fn the_parts_have_no_switch_on_any_page_only_the_one_switch_does() {
+        let on_page: HashSet<&str> = entries().iter().map(|e| e.field).collect();
+        for p in Part::ALL {
+            assert!(!on_page.contains(p.field()), "{p:?} must not have a switch of its own any more");
+        }
+        // the one exception is on the Masaüstü page: Windows' own desktop can be kept (`dock/parts.rs`)
+        let on_desktop_page: Vec<&str> = crate::desktop_page::entries().iter().map(|e| e.field).filter(|f| Part::ALL.iter().any(|p| p.field() == *f)).collect();
+        assert_eq!(on_desktop_page, ["shell_desktop_cover"]);
+        assert!(on_page.contains("dock_enabled"));
+    }
+
+    #[test]
+    fn no_other_page_draws_a_dock_setting_or_a_part() {
+        // the old block lived in settings_view.rs; nothing of it may come back there (or be drawn a second time)
+        let other = include_str!("settings_view.rs");
+        for e in entries() {
+            assert!(!uses_field(other, e.field), "settings_view.rs still uses {}", e.field);
+        }
+        for p in Part::ALL {
+            assert!(!uses_field(other, p.field()), "settings_view.rs still uses {}", p.field());
+            // (the Masaüstü page has the one exception, the desktop's own switch)
+            assert!(p == Part::Desktop || !uses_field(include_str!("desktop_page.rs"), p.field()), "desktop_page.rs still uses {}", p.field());
+        }
+    }
+
+    /// Whether `src` reads or writes `.field` on any binding (`s.`, `st.`, `settings.`, `cx.global::<Settings>().`), not a longer name
+    /// that only starts with it.
+    fn uses_field(src: &str, field: &str) -> bool {
+        let needle = format!(".{field}");
+        src.match_indices(&needle).any(|(at, _)| !src[at + needle.len()..].starts_with(|c: char| c.is_alphanumeric() || c == '_'))
+    }
+
+    #[test]
+    fn the_field_scan_sees_any_binding_name_and_not_longer_names() {
+        assert!(uses_field("let on = s.dock_size;", "dock_size"));
+        assert!(uses_field("if settings.dock_size == x {}", "dock_size"));
+        assert!(uses_field("st.shell_win_key=true", "shell_win_key"));
+        assert!(uses_field("cx.global::<Settings>().dock_reserve.clone()", "dock_reserve"));
+        assert!(!uses_field("let on = s.dock_size_extra;", "dock_size"));
+        assert!(!uses_field("dock_size without a dot", "dock_size"));
+        assert!(!uses_field("s.dock_enabled_x + s.hdock_enabled", "dock_enabled"));
+    }
+
+    #[test]
+    fn every_section_has_entries_and_follows_the_order() {
+        let g = grouped(&entries());
+        let secs: Vec<Section> = g.iter().map(|(s, _)| *s).collect();
+        assert_eq!(secs, Section::ALL.to_vec(), "an empty section would be a heading with nothing under it");
+        // the sections hold what the page promises
+        let ids = |sec: Section| g.iter().find(|(s, _)| *s == sec).map(|(_, v)| v.iter().map(|e| e.field).collect::<Vec<_>>()).unwrap();
+        assert_eq!(ids(Section::General), ["dock_enabled", "dock_reserve", "dock_size", "dock_side_tall", "dock_tray_compact", "dock_all_monitors", "dock_magnify", "dock_scroll_volume", "dock_start_grow"]);
+        assert_eq!(ids(Section::Left), ["dock_own_start", "dock_start_recommended", "dock_search", "dock_search_hypersearch", "dock_weather_city"]);
+        assert_eq!(ids(Section::Middle), ["dock_hover_previews", "dock_app_menu", "dock_thin_when_maximized", "dock_apps_where"]);
+        assert_eq!(ids(Section::Right), ["dock_own_control_centre", "dock_own_calendar", "dock_own_notifications"]);
+    }
+
+    #[test]
+    fn each_switch_reads_and_writes_its_own_field_only() {
+        let switches: Vec<Entry> = entries().into_iter().filter(|e| matches!(e.control, Control::Switch(..))).collect();
+        assert!(switches.len() >= 9);
+        for (i, e) in switches.iter().enumerate() {
+            let Control::Switch(get, set) = e.control else { unreachable!() };
+            for start in [false, true] {
+                // begin from a state where every switch has the same value, flip one, and only that one may differ
+                let mut s = Settings::default();
+                for o in &switches {
+                    if let Control::Switch(_, set_o) = o.control {
+                        set_o(&mut s, start);
+                    }
+                }
+                set(&mut s, !start);
+                for (j, o) in switches.iter().enumerate() {
+                    let Control::Switch(get_o, _) = o.control else { unreachable!() };
+                    assert_eq!(get_o(&s), if i == j { !start } else { start }, "{} was changed through {}", o.field, e.field);
+                }
+                assert_eq!(get(&s), !start);
+            }
+        }
+    }
+
+    #[test]
+    fn a_switch_shows_the_value_the_default_settings_have() {
+        let d = Settings::default();
+        let get = |f: &str| match entries().into_iter().find(|e| e.field == f).unwrap().control {
+            Control::Switch(g, _) => g(&d),
+            _ => panic!("{f} is not a switch"),
+        };
+        assert!(!get("dock_enabled"), "experimental: off until asked for");
+        assert!(get("dock_reserve"));
+        // the parts come with the dock: their own values default to true (and nothing runs while the dock is off)
+        assert!(Part::ALL.iter().all(|p| p.own_value(&d)));
+    }
+
+    #[test]
+    fn everything_but_the_dock_switch_needs_the_dock() {
+        let off = Settings { dock_enabled: false, ..Default::default() };
+        let on = Settings { dock_enabled: true, ..Default::default() };
+        for e in entries() {
+            if e.field == "dock_enabled" {
+                assert_eq!(e.needs, Needs::Nothing);
+                assert!(e.needs.met(&off), "the switch that starts the dock must work while the dock is off");
+                assert_eq!(e.state(&off), RowState::Live);
+            } else {
+                assert_eq!(e.needs, Needs::DockOn, "{}", e.field);
+                assert!(!e.needs.met(&off), "{} must not be usable while the dock is off", e.field);
+                assert!(e.needs.met(&on));
+                assert!(!e.needs.reason().is_empty());
+                assert_eq!(e.state(&off), RowState::Inert, "{}", e.field);
+            }
+            assert_eq!(e.state(&on), RowState::Live, "{}", e.field);
+        }
+        assert!(Needs::Nothing.reason().is_empty());
+    }
+
+    /// Writes a control once with a value other than the current one.
+    fn change_once(e: &Entry, s: &mut Settings) {
+        match e.control {
+            Control::Switch(get, set) => set(s, !get(s)),
+            Control::Size(get, set) => set(s, DockSizePref::at_position((get(s).position() + 1) % 16)),
+            Control::Magnify(get, set) => set(s, magnify_choices().into_iter().map(|(v, _)| v).find(|v| *v != get(s)).unwrap()),
+            Control::AppsWhere(get, set) => set(s, apps_where_choices().into_iter().map(|(v, _)| v).find(|v| *v != get(s)).unwrap()),
+            Control::Search(get, set) => set(s, search_choices().into_iter().map(|(v, _)| v).find(|v| *v != get(s)).unwrap()),
+            Control::City(get, set) => {
+                assert_ne!(get(s), "Erzincan");
+                set(s, "Erzincan".to_string());
+            }
+        }
+    }
+
+    /// Every control written once, and the JSON of the settings before and after: exactly the entry's own field may differ. This ties
+    /// a dropdown's or the city's closure to its entry, which the switches' test above cannot.
+    #[test]
+    fn every_control_changes_its_own_field_and_no_other() {
+        let before = serde_json::to_value(Settings::default()).unwrap();
+        let before = before.as_object().unwrap();
+        for e in entries() {
+            let mut s = Settings::default();
+            change_once(&e, &mut s);
+            let after = serde_json::to_value(&s).unwrap();
+            let after = after.as_object().unwrap();
+            let all: HashSet<&String> = before.keys().chain(after.keys()).collect();
+            let changed: Vec<&String> = all.into_iter().filter(|k| before.get(*k) != after.get(*k)).collect();
+            assert_eq!(changed.len(), 1, "{} changed {changed:?}", e.field);
+            assert_eq!(changed[0], e.field, "the control of {} changed {}", e.field, changed[0]);
+        }
+    }
+
+    #[test]
+    fn the_dock_switch_is_marked_experimental_and_every_text_has_its_english_pair() {
+        while_turkish(|| {
+            let en: HashSet<&str> = crate::i18n_en::EN.iter().map(|(k, _)| *k).collect();
+            let has = |text: &str| en.contains(text);
+            for e in entries() {
+                if e.field == "dock_enabled" {
+                    assert!(e.title.contains("(deneysel)"), "{} is experimental and must say so", e.field);
+                    assert_eq!(e.title, parts::switch_title());
+                    assert_eq!(e.desc, Some(parts::switch_description()));
+                }
+                assert!(has(e.title), "no English for the title of {}", e.field);
+                assert!(e.desc.is_none_or(has), "no English for the description of {}", e.field);
+            }
+            for sec in Section::ALL {
+                assert!(has(sec.title()), "{sec:?}");
+            }
+            for text in [intro(), Needs::DockOn.reason()] {
+                assert!(has(text), "{text}");
+            }
+            for (_, l) in magnify_choices() {
+                assert!(has(&l), "{l}");
+            }
+            for (_, l) in apps_where_choices() {
+                assert!(has(&l), "{l}");
+            }
+        });
+    }
+
+    #[test]
+    fn the_switch_says_what_it_does_in_a_few_short_lines_with_the_old_names_in_them() {
+        while_turkish(|| {
+            let desc = entries().into_iter().find(|e| e.field == "dock_enabled").unwrap().desc.unwrap();
+            assert!(desc.lines().count() >= 4);
+            for word in ["Başlat", "arama", "denetim merkezi", "masaüstü", "tepsi simgeleri", "görev çubuğu", "Windows tuşu", "Alt+Tab"] {
+                assert!(desc.contains(word), "the description lacks `{word}`");
+            }
+        });
+    }
+
+    #[test]
+    fn every_entry_has_texts_and_the_city_line_is_made_from_the_city() {
+        while_turkish(|| {
+            for e in entries() {
+                assert!(!e.title.is_empty(), "{}", e.field);
+                assert!(e.desc.is_some_and(|d| !d.is_empty()) || matches!(e.control, Control::City(..)), "{} has no description", e.field);
+                assert!(!e.id.is_empty());
+            }
+            assert!(!intro().is_empty());
+            assert_eq!(city_line("  Erzincan "), "Erzincan");
+            assert!(!city_line("   ").is_empty() && city_line("   ") != "   ");
+        });
+    }
+}

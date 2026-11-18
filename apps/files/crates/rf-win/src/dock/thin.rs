@@ -1,0 +1,986 @@
+﻿//! The thin dock: while a maximised window is on the dock's monitor the middle island drops to the height of the side islands, so the
+//! screen gives that room to the window, and grows back to its full size when the pointer comes near. Pure rules, no window and no
+//! clock of their own: the app feeds them facts and the time, and every rule has a test.
+//!
+//! WHAT IS THIN. The middle island's GLASS is `SIDE_HEIGHT` high (the same line as the other two: all three bottoms are the same
+//! `MARGIN_BOTTOM` above the work area's bottom) and its icons are `THIN_ICON` instead of `ICON_REST`. The icons keep their CENTRES,
+//! so the island is exactly as wide as it was and nothing beside it moves; only the glass lowers its top and the icons shrink in place.
+//! That is also what keeps "the icon the user aims at stays under the pointer" true while the dock grows: horizontally nothing moves, and
+//! the icons grow up from the same baseline the magnification uses.
+//!
+//! THE FIVE RULES (each is a type below):
+//! 1. [`Follower`]: thin or full from (setting, a maximised window seen, pointer near, something open). It goes back to thin the
+//!    moment the pointer has left and nothing is open ([`LEAVE_MS`] is 0, see there).
+//! 2. [`BandRule`]: the band the dock reserves is the thin one for as long as the setting is on. It does NOT follow the windows (a
+//!    window maximised into the full band had to be moved a second time when the band went thin: see there) and it does NOT depend on
+//!    the pointer: the full dock, and the dock grown under the pointer, float over the work area's lowest 24 units.
+//! 3. [`Zone`]: what "near" is.
+//! 4. [`counts_as_maximized`]: which windows make the dock thin (the maximised ones, and those docked to the band's edge under the
+//!    dock: [`docked_under`]).
+//! 5. [`Squeeze`]: the numbers of every moment between thin and full, and [`glass_height_px`] for the device pixels.
+
+use super::layout::{ICON_REST, MARGIN_BOTTOM, MIDDLE_HEIGHT, MIDDLE_RESERVE, Rect, SIDE_HEIGHT, px};
+
+/// The thin dock's glass height: the side islands', so the three stand on one line and are one height.
+pub const THIN_HEIGHT: f32 = SIDE_HEIGHT;
+/// An icon of the thin dock, dock units. With the running mark below it (the same 7 and 4 as at full size) it fills the 48 units the
+/// glass has: 12 under the icon's foot, 30 of icon, 6 over its head (`the_icon_and_its_mark_fit_the_thin_glass`).
+pub const THIN_ICON: f32 = 30.0;
+/// What the application desktop toolbar reserves while the dock is thin: the thin glass and the margin above and below it, as the full
+/// band is the full glass and its margins (`layout::RESERVED_HEIGHT`).
+pub const THIN_RESERVED_HEIGHT: f32 = THIN_HEIGHT + 2.0 * MARGIN_BOTTOM;
+/// How far above the THIN glass the pointer still counts as near, dock units: the full glass (24 units higher) and the room above
+/// it that grown icons reach into (`layout::HEADROOM`). It must hold everything the island's own pointer region can hold, or the
+/// island's mouse events ("on the dock: near") and the look at the cursor ("outside the zone: away") would contradict each other
+/// over the top of a grown icon. (It was counted from the band's margin until the margin became smaller than that reach.)
+pub const NEAR_ABOVE: f32 = MIDDLE_HEIGHT - THIN_HEIGHT + super::layout::HEADROOM;
+/// How far to each side of the thin glass the pointer still counts as near: the room the grown glass may widen into, so the whole of a
+/// widened glass is inside the zone.
+pub const NEAR_SIDE: f32 = MIDDLE_RESERVE;
+/// After the pointer has left (and nothing is open) the dock waits this long before it goes thin again. NONE: it was 400 ms, and the
+/// user saw the dock shrink in two steps (the magnification went out when the pointer left the icons, then a pause, then the glass
+/// went thin). With no wait the two are one motion: the bell's height is the presence times the growth (`Squeeze::bell`) and both
+/// run for the same time. A pointer that comes straight back grows the dock again from where the motion is; nothing else follows
+/// the pointer (the band does not), so a short visit costs a few frames.
+pub const LEAVE_MS: u64 = 0;
+/// A maximised window must have been seen this long before the dock goes thin for it. NONE (it was 400 ms): the dock goes thin the
+/// moment a window is maximized, while the system's own maximize animation still runs, so that the two are one motion. A window that
+/// only flickers through "maximized" makes the dock shrink and grow; nothing else moves with it (the band does not: [`BandRule`]).
+pub const SEEN_MS: u64 = 0;
+/// How far below the work area's bottom the rectangle of a window that is docked to that edge may end, px at 100 %: the system's
+/// invisible resize frame (7 px) and a little. A window that ends lower than that goes under the dock; it is not standing on the edge.
+pub const DOCK_BELOW: f32 = 12.0;
+/// ... and how far above it, device px (a snap that was rounded).
+pub const DOCK_ABOVE: i32 = 2;
+
+/// The band's thickness in device px for the dock unit.
+///
+/// The thin band may be thinner than Windows' taskbar strip (60 units... less at small sizes): the host that holds the edge of a
+/// hidden taskbar knows the work areas it set itself (`rf_shellguard::tbwork::plan_edge_held`), so it needs no band that is cut
+/// deeper than the strip to recognise its own.
+pub fn reserved_thickness(unit: f32, thin: bool) -> i32 {
+    if thin { px(THIN_RESERVED_HEIGHT, unit) } else { super::layout::reserved_thickness(unit) }
+}
+
+// ---------------------------------------------------------------- the numbers between thin and full
+
+/// How thin the middle island is at one moment: `grow` 0 is the thin dock, 1 the full one (today's, bit for bit).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Squeeze {
+    pub grow: f32,
+    /// The glass's height, dock units.
+    pub glass_h: f32,
+    /// What an icon's rest size is multiplied by (the icon keeps its centre).
+    pub icon: f32,
+}
+
+fn lerp(a: f32, b: f32, t: f32) -> f32 {
+    a + (b - a) * t
+}
+
+impl Squeeze {
+    /// The full dock.
+    pub const FULL: Squeeze = Squeeze { grow: 1.0, glass_h: MIDDLE_HEIGHT, icon: 1.0 };
+
+    pub fn at(grow: f32) -> Squeeze {
+        let g = grow.clamp(0.0, 1.0);
+        if g >= 1.0 {
+            return Squeeze::FULL;
+        }
+        Squeeze { grow: g, glass_h: lerp(THIN_HEIGHT, MIDDLE_HEIGHT, g), icon: lerp(THIN_ICON / ICON_REST, 1.0, g) }
+    }
+
+    pub fn is_full(&self) -> bool {
+        self.grow >= 1.0
+    }
+
+    /// The height of the magnification's bell: it is nothing while the dock is thin ("no magnification bell at rest") and comes in with
+    /// the growth.
+    pub fn bell(&self, presence: f32) -> f32 {
+        presence * self.grow
+    }
+}
+
+/// The glass's height in device px: the full one as given (`full_px`, the layout's), and the thin one exactly what the side islands'
+/// glass is at this unit (`px(SIDE_HEIGHT, unit)`, rounded the way the layout rounds it, so all three are the same number of pixels).
+pub fn glass_height_px(sq: &Squeeze, unit: f32, full_px: f32) -> f32 {
+    if sq.is_full() {
+        return full_px;
+    }
+    lerp(px(THIN_HEIGHT, unit) as f32, full_px, sq.grow)
+}
+
+/// The glass rectangle of the thin dock: the full one's bottom edge, the side islands' height.
+pub fn thin_glass(full: Rect, unit: f32) -> Rect {
+    Rect { top: full.bottom - px(THIN_HEIGHT, unit), ..full }
+}
+
+// ---------------------------------------------------------------- near
+
+/// The area in which the pointer makes the thin dock grow: the thin glass and the band around it, `NEAR_SIDE` to each side, from
+/// `NEAR_ABOVE` above the band's top edge down to the bottom of the monitor, less the two side islands (the pointer on the Start button
+/// or the clock is not on the dock).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Zone {
+    pub near: Rect,
+    pub left: Rect,
+    pub right: Rect,
+}
+
+impl Zone {
+    pub fn contains(&self, x: i32, y: i32) -> bool {
+        self.near.contains(x, y) && !self.left.contains(x, y) && !self.right.contains(x, y)
+    }
+}
+
+/// `full` is the middle island's glass at its full height (the layout's), `left` and `right` the side islands' glass.
+pub fn zone(full: Rect, left: Rect, right: Rect, monitor: Rect, unit: f32) -> Zone {
+    let thin = thin_glass(full, unit);
+    let side = px(NEAR_SIDE, unit);
+    let near = Rect {
+        left: (thin.left - side).max(monitor.left),
+        right: (thin.right + side).min(monitor.right),
+        // up to the top of the room a grown icon reaches into above the full glass
+        top: (thin.top - px(NEAR_ABOVE, unit)).max(monitor.top),
+        bottom: monitor.bottom,
+    };
+    Zone { near, left, right }
+}
+
+// ---------------------------------------------------------------- thin or full
+
+/// What the choice between thin and full depends on.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Inputs {
+    /// The setting "Pencere büyütüldüğünde dock'u incelt".
+    pub enabled: bool,
+    /// A window the user can see stands on the band on the dock's monitor: a maximised one, or one docked to the band's edge under
+    /// the dock ([`counts_as_maximized`]).
+    pub maximized: bool,
+    /// The pointer is in the [`Zone`] (or on the dock itself), or a mouse button is held near it.
+    pub near: bool,
+    /// A panel, a menu or a hover preview of the dock is open, or a press is on the dock.
+    pub open: bool,
+}
+
+/// The answer of [`Follower::step`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Verdict {
+    /// The dock should be thin (false: full, grown or never made thin).
+    pub thin: bool,
+    /// When nothing else happens, ask again at this time (ms on the caller's clock): the end of the wait before going thin.
+    pub wake_at: Option<u64>,
+}
+
+/// Remembers since when the pointer has been away, so that the dock goes thin [`LEAVE_MS`] after it left (at once, as that is 0).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Follower {
+    thin: bool,
+    away_since: Option<u64>,
+    /// Since when a maximised window has been seen without a break.
+    seen_since: Option<u64>,
+}
+
+impl Follower {
+    pub fn new() -> Follower {
+        Follower::default()
+    }
+
+    pub fn thin(&self) -> bool {
+        self.thin
+    }
+
+    /// One look at the facts at `now` (ms, any clock that only goes forward).
+    pub fn step(&mut self, now: u64, i: Inputs) -> Verdict {
+        // no setting or no maximised window: the dock of today, at once (a window restored gives the room back as it goes)
+        if !i.enabled || !i.maximized {
+            self.thin = false;
+            self.away_since = None;
+            self.seen_since = None;
+            return Verdict { thin: false, wake_at: None };
+        }
+        let seen = *self.seen_since.get_or_insert(now);
+        // near or something open: grown, and the wait starts again from the moment both are over
+        if i.near || i.open {
+            self.thin = false;
+            self.away_since = None;
+            return Verdict { thin: false, wake_at: None };
+        }
+        if self.thin {
+            return Verdict { thin: true, wake_at: None };
+        }
+        let since = *self.away_since.get_or_insert(now);
+        // (the later of the two: the pointer has been away long enough, and the window has been there long enough)
+        let due = (since + LEAVE_MS).max(seen + SEEN_MS);
+        if now >= due {
+            self.thin = true;
+            self.away_since = None;
+            Verdict { thin: true, wake_at: None }
+        } else {
+            Verdict { thin: false, wake_at: Some(due) }
+        }
+    }
+}
+
+// ---------------------------------------------------------------- the band
+
+/// The band the dock reserves: the thin one for as long as the setting is on, whatever the windows and the pointer do.
+///
+/// WHY IT DOES NOT FOLLOW THE WINDOWS. It did until 2026-11-13: the full band, and the thin one while a maximised window was there.
+/// But a window is maximised INTO the work area of that moment. With the full band in force it stopped at the full band's edge; the
+/// dock went thin, the band followed, and the window had to be moved a second time into the room the dock had given up. The user saw
+/// a gap under the window that closed a moment later ("böyle boşluk oluyor sonra kapanıyor ... 2 adımda kapanıyor"). No wait is short
+/// enough for that: the first size is the system's and it is there before any event about it. With the thin band in force beforehand
+/// the window arrives where it stays, and nothing is moved afterwards: not that window, not the other maximised ones, not the
+/// desktop's icons.
+///
+/// THE PRICE: while no window stands on the band, the full dock's glass reaches `MIDDLE_HEIGHT - THIN_HEIGHT` (24) units into the
+/// work area. A maximised window makes the dock thin; a window docked to the band's edge under the glass does too ([`docked_under`]),
+/// so the full glass never lies on a window that was placed against the edge. A window that is merely dragged down there goes under
+/// the dock, as it goes under any taskbar.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BandRule {
+    /// The band now in force is the thin one.
+    applied: bool,
+}
+
+/// The answer of [`BandRule::step`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Band {
+    /// The thin band is the one in force.
+    pub thin: bool,
+    /// It changed with this look: set the band.
+    pub changed: bool,
+}
+
+impl BandRule {
+    pub fn new() -> BandRule {
+        BandRule::default()
+    }
+
+    pub fn thin(&self) -> bool {
+        self.applied
+    }
+
+    /// `enabled`: the setting is on. Neither the windows nor the pointer are inputs.
+    pub fn step(&mut self, enabled: bool) -> Band {
+        let changed = enabled != self.applied;
+        self.applied = enabled;
+        Band { thin: enabled, changed }
+    }
+
+    /// The setting was switched off: the full band is back. True when the band was the thin one (it must be set again).
+    pub fn reset(&mut self) -> bool {
+        std::mem::take(&mut self.applied)
+    }
+}
+
+// ---------------------------------------------------------------- the two rules together
+
+/// The facts and the two rules ([`Follower`], [`BandRule`]) as one piece, so that the sequences the app's wiring goes through (a
+/// window restored while a menu is open, the setting switched, the poller that must keep running) can be tested without a window and
+/// with a clock of the test's own. The app owns one and does nothing else but feed it and act on [`Look`].
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Model {
+    pub inputs: Inputs,
+    follower: Follower,
+    band: BandRule,
+}
+
+/// What [`Model::look`] answers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Look {
+    /// The middle island should be thin.
+    pub thin: bool,
+    /// The band: `changed` says it must be set now.
+    pub band: Band,
+    /// When nothing else happens, look again at this time (ms): the deadline of the thin-or-full rule.
+    pub wake_at: Option<u64>,
+}
+
+impl Model {
+    pub fn new() -> Model {
+        Model::default()
+    }
+
+    /// One look at the facts as they are at `now` (ms, a clock that only goes forward).
+    pub fn look(&mut self, now: u64) -> Look {
+        let i = self.inputs;
+        let verdict = self.follower.step(now, i);
+        // the band follows the setting alone: neither the windows nor the pointer
+        let band = self.band.step(i.enabled);
+        Look { thin: verdict.thin, band, wake_at: verdict.wake_at }
+    }
+
+    /// The band in force is the thin one.
+    pub fn band_thin(&self) -> bool {
+        self.band.thin()
+    }
+
+    /// Whether the cursor and the open panels must be looked at on a timer: while a window stands on the band, and only then (with
+    /// none the dock is full and nothing follows the pointer). The band is no reason to look: it does not change with what is seen.
+    pub fn needs_polling(&self) -> bool {
+        self.inputs.enabled && self.inputs.maximized
+    }
+
+    /// One look of the poller at the cursor and at what is open. `inside`: the cursor is in the [`Zone`] (`None`: the zone is not
+    /// known at the moment, so the pointer is neither said to be near nor to have left); `button`: a mouse button is held. Returns
+    /// whether `near` or `open` changed, which asks for a [`Model::look`].
+    pub fn observe(&mut self, inside: Option<bool>, button: bool, open: bool) -> bool {
+        let near = match inside {
+            _ if !self.inputs.maximized => false,
+            // (a press that began on the dock and slipped out of the zone: still near)
+            Some(inside) => inside || (button && self.inputs.near),
+            None => self.inputs.near,
+        };
+        let changed = near != self.inputs.near || open != self.inputs.open;
+        self.inputs.near = near;
+        self.inputs.open = open;
+        changed
+    }
+
+    /// The setting was switched off: the dock of today, at once, and the full band back. True: the band was the thin one, so it
+    /// must be set again.
+    pub fn switch_off(&mut self) -> bool {
+        self.inputs = Inputs { enabled: false, ..Inputs::default() };
+        self.follower = Follower::new();
+        self.band.reset()
+    }
+}
+
+// ---------------------------------------------------------------- which windows count
+
+/// What is known about one top-level window.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct WinFacts {
+    pub visible: bool,
+    pub minimized: bool,
+    /// Hidden by DWM: on another virtual desktop, a suspended app.
+    pub cloaked: bool,
+    pub zoomed: bool,
+    /// Not maximised, but docked to the band's edge under the dock ([`docked_under`]): a window snapped to a half or a quarter of
+    /// the screen.
+    pub docked: bool,
+    pub has_owner: bool,
+    pub ex_style: u32,
+    /// A window of the dock's own process (its islands, its panels, the desktop).
+    pub own: bool,
+    /// A piece of the shell (the desktop, the taskbar, the Windows Start menu's host): never a window the user maximised
+    /// (`fullscreen::is_shell_class`).
+    pub shell: bool,
+    /// On the monitor the dock is on.
+    pub on_dock_monitor: bool,
+}
+
+/// Whether this window is a window the user can see that stands on the band on the dock's monitor, maximised or docked to the edge
+/// under the dock: the windows a taskbar button belongs to, by the same style rules as the task list (`tasklist::style_is_task`),
+/// visible, not minimised, not cloaked, not ours, not the shell's.
+pub fn counts_as_maximized(f: &WinFacts) -> bool {
+    (f.zoomed || f.docked) && f.visible && !f.minimized && !f.cloaked && !f.own && !f.shell && f.on_dock_monitor && crate::tasklist::style_is_task(f.has_owner, f.ex_style)
+}
+
+/// Whether a window that is not maximised is DOCKED TO THE BAND'S EDGE UNDER THE DOCK: its rectangle ends at the work area's bottom
+/// (`work_bottom`; up to `below` device px under it, which is the invisible resize frame of that window's monitor, and
+/// [`DOCK_ABOVE`] over it) and it lies under the middle island's full glass (`glass`, device px, screen coordinates) somewhere
+/// along its width. That is a window snapped to the left or the right half, to a lower quarter, or pushed against the edge by hand:
+/// the full glass, which reaches into the work area ([`BandRule`]), would lie on its lowest rows. A window snapped to a third beside
+/// the dock, or to an upper quarter, is not under it and changes nothing; one that ends lower than the edge goes under the dock like
+/// under any taskbar.
+pub fn docked_under(window: Rect, work_bottom: i32, glass: Rect, below: i32) -> bool {
+    window.bottom >= work_bottom - DOCK_ABOVE && window.bottom <= work_bottom + below.max(0) && window.top < work_bottom && window.left < glass.right && window.right > glass.left
+}
+
+/// How far under the work area's bottom a docked window's rectangle may end on a monitor of this scale ([`DOCK_BELOW`]), device px.
+pub fn dock_below_px(scale: f32) -> i32 {
+    px(DOCK_BELOW, scale)
+}
+
+/// Whether any of these windows is such a window.
+pub fn any_maximized(windows: impl IntoIterator<Item = WinFacts>) -> bool {
+    windows.into_iter().any(|f| counts_as_maximized(&f))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::super::layout::{self, Widths};
+
+    fn on(maximized: bool, near: bool, open: bool) -> Inputs {
+        Inputs { enabled: true, maximized, near, open }
+    }
+
+    const W: Widths = Widths { left: 330.0, middle: 600.0, right: 280.0 };
+
+    // ---- thin or full
+
+    #[test]
+    fn without_the_setting_or_a_maximised_window_the_dock_is_the_dock_of_today() {
+        let mut f = Follower::new();
+        for (now, i) in [
+            (0, Inputs { enabled: false, maximized: true, near: false, open: false }),
+            (10_000, Inputs { enabled: false, maximized: true, near: false, open: false }),
+            (20_000, on(false, false, false)),
+            (30_000, on(false, true, true)),
+        ] {
+            assert_eq!(f.step(now, i), Verdict { thin: false, wake_at: None }, "{i:?}");
+        }
+    }
+
+    #[test]
+    fn a_maximised_window_with_the_pointer_far_makes_the_dock_thin_after_the_wait() {
+        let mut f = Follower::new();
+        // a window has just been maximised and the pointer is far: thin at once, while the window still grows (no wait: see SEEN_MS)
+        assert_eq!(SEEN_MS, 0);
+        assert_eq!(f.step(1_000, on(true, false, false)), Verdict { thin: true, wake_at: None });
+        // and it stays thin as long as nothing changes
+        assert_eq!(f.step(60_000, on(true, false, false)), Verdict { thin: true, wake_at: None });
+    }
+
+    #[test]
+    fn the_pointer_near_or_something_open_grows_it_at_once() {
+        let mut f = Follower::new();
+        f.step(0, on(true, false, false));
+        f.step(500, on(true, false, false));
+        assert!(f.thin());
+        assert!(!f.step(600, on(true, true, false)).thin, "the pointer came near");
+        assert!(!f.step(700, on(true, false, true)).thin, "a panel is open and the pointer is away");
+        // ... and a tray overflow panel, the Start panel by the keyboard: the same input
+        assert!(!f.step(800, on(true, false, true)).thin);
+    }
+
+    #[test]
+    fn it_goes_thin_again_only_400_ms_after_the_pointer_left_and_the_last_thing_closed() {
+        let mut f = Follower::new();
+        f.step(0, on(true, true, false));
+        // the pointer leaves at 1000: thin in that very look (one motion with the magnification going out)
+        assert_eq!(f.step(1_000, on(true, false, false)), Verdict { thin: true, wake_at: None });
+        // grown again, a panel stays open after the pointer left: the wait does not run while it is open
+        f.step(2_000, on(true, true, false));
+        assert!(!f.step(3_000, on(true, false, true)).thin);
+        assert!(!f.step(9_000, on(true, false, true)).thin, "open for a long time");
+        // it closes at 9000: thin then, not before
+        assert_eq!(f.step(9_000, on(true, false, false)), Verdict { thin: true, wake_at: None });
+    }
+
+    #[test]
+    fn a_pointer_that_comes_back_during_the_wait_starts_the_wait_again() {
+        let mut f = Follower::new();
+        f.step(0, on(true, true, false));
+        assert!(f.step(1_000, on(true, false, false)).thin); // left
+        assert!(!f.step(1_300, on(true, true, false)).thin, "back: grown again at once");
+        // left again at 1500: thin again at once
+        assert_eq!(f.step(1_500, on(true, false, false)), Verdict { thin: true, wake_at: None });
+    }
+
+    #[test]
+    fn the_window_restored_while_the_dock_is_thin_gives_the_full_dock_back_at_once() {
+        let mut f = Follower::new();
+        f.step(0, on(true, false, false));
+        f.step(400, on(true, false, false));
+        assert!(f.thin());
+        assert_eq!(f.step(401, on(false, false, false)), Verdict { thin: false, wake_at: None });
+        // and switching the setting off does the same
+        f.step(500, on(true, false, false));
+        f.step(1_000, on(true, false, false));
+        assert!(f.thin());
+        assert!(!f.step(1_001, Inputs { enabled: false, ..on(true, false, false) }).thin);
+    }
+
+    // ---- all of it together
+
+    /// A short story played through both rules, the way the app's look at the facts does it (every 50 ms, plus the deadlines): a window
+    /// is maximised, the pointer comes and goes, a panel opens, the window is restored, and a window is maximised and restored in a
+    /// flicker. What the user sees (thin or full) and what the other windows see (the band) are told apart.
+    #[test]
+    fn a_story_of_a_session() {
+        struct Fact {
+            at: u64,
+            maximized: bool,
+            near: bool,
+            open: bool,
+        }
+        let story = [
+            Fact { at: 0, maximized: false, near: false, open: false },
+            Fact { at: 1_000, maximized: true, near: false, open: false },   // a window is maximised; the pointer is far
+            Fact { at: 5_000, maximized: true, near: true, open: false },    // the pointer comes to the dock
+            Fact { at: 7_000, maximized: true, near: false, open: false },   // and goes
+            Fact { at: 9_000, maximized: true, near: false, open: true },    // the Start panel is opened by the keyboard
+            Fact { at: 10_000, maximized: true, near: false, open: false },  // and closed
+            Fact { at: 15_000, maximized: false, near: false, open: false }, // the window is restored
+            Fact { at: 16_000, maximized: true, near: false, open: false },  // a flicker: maximised ...
+            Fact { at: 16_200, maximized: false, near: false, open: false }, // ... restored
+            Fact { at: 16_300, maximized: true, near: false, open: false },  // ... maximised
+            Fact { at: 16_500, maximized: false, near: false, open: false }, // ... restored
+        ];
+        let mut m = Model::new();
+        m.inputs.enabled = true;
+        let mut fact = &story[0];
+        let (mut looks, mut band_changes) = (Vec::new(), Vec::new());
+        let mut last_thin = false;
+        for now in (0..30_000u64).step_by(50) {
+            if let Some(next) = story.iter().find(|s| s.at == now) {
+                fact = next;
+            }
+            m.inputs = Inputs { enabled: true, maximized: fact.maximized, near: fact.near, open: fact.open };
+            let l = m.look(now);
+            if l.band.changed {
+                band_changes.push((now, l.band.thin));
+            }
+            if l.thin != last_thin {
+                looks.push((now, l.thin));
+                last_thin = l.thin;
+            }
+            if fact.near || fact.open {
+                assert!(!l.thin, "grown at {now}");
+            }
+        }
+        // thin the moment the window came (1000), grown at 5000, thin again the moment the pointer went (7000), grown while the panel
+        // is open (9000 to 10000), thin the moment it closed, full when the window is restored at 15000; the flicker at the end makes
+        // the dock itself shrink and grow with the window (that costs frames only)
+        assert_eq!(looks, [(1_000, true), (5_000, false), (7_000, true), (9_000, false), (10_000, true), (15_000, false), (16_000, true), (16_200, false), (16_300, true), (16_500, false)]);
+        // the band: the thin one from the first look, before any window was maximised, and never set again: not when the window came
+        // (it arrived in the room it keeps), not when it was restored, not by the pointer, the panel or the flicker
+        assert_eq!(band_changes, [(0, true)]);
+    }
+
+    // ---- the band
+
+    #[test]
+    fn the_band_is_the_thin_one_while_the_setting_is_on_whatever_the_windows_do() {
+        let mut m = Model::new();
+        // setting off: the full band, a maximised window or not
+        m.inputs = Inputs { enabled: false, maximized: true, near: false, open: false };
+        assert_eq!(m.look(0).band, Band { thin: false, changed: false });
+        // switched on with no window at all: the thin band at once (it is in force before a window is ever maximised)
+        m.inputs = on(false, false, false);
+        assert_eq!(m.look(10).band, Band { thin: true, changed: true });
+        assert!(m.band_thin());
+        // a window is maximised, restored, maximised again, the pointer comes, a panel opens, the window goes: the band is never set again
+        let mut sets = 0;
+        for (t, maximized, near, open) in
+            [(100, true, false, false), (300, false, false, false), (400, true, false, false), (500, true, true, false), (600, true, true, true), (700, false, false, true), (800, false, false, false), (60_000, true, false, false)]
+        {
+            m.inputs = on(maximized, near, open);
+            let l = m.look(t);
+            sets += usize::from(l.band.changed);
+            assert!(l.band.thin, "at {t}");
+        }
+        assert_eq!(sets, 0, "a maximised window arrives in the room it keeps: nothing is moved a second time");
+    }
+
+    #[test]
+    fn the_dock_itself_still_follows_the_window_and_the_pointer() {
+        // (the band is one thing, the glass another)
+        let mut m = Model::new();
+        m.inputs = on(false, false, false);
+        assert!(!m.look(0).thin, "no window on the band: the full dock, over the thin band");
+        m.inputs = on(true, false, false);
+        assert!(m.look(100).thin, "a window was maximised: thin in that very look");
+        let thickness = reserved_thickness(1.0, m.band_thin());
+        assert_eq!(thickness, 56);
+        let mut grown = 0;
+        for (t, near) in [(1_000, false), (1_500, true), (2_000, false), (2_500, true), (3_000, false), (3_500, false), (4_000, true)] {
+            m.inputs.near = near;
+            let l = m.look(t);
+            grown += usize::from(!l.thin);
+            assert_eq!(l.band, Band { thin: true, changed: false }, "at {t}");
+            assert_eq!(reserved_thickness(1.0, m.band_thin()), thickness);
+        }
+        assert!(grown >= 3, "the dock itself did follow the pointer");
+        m.inputs = on(false, false, false);
+        let l = m.look(5_000);
+        assert!(!l.thin && !l.band.changed, "restored: the full dock again, and still no change of the band");
+    }
+
+    #[test]
+    fn switching_the_setting_off_gives_the_full_band_back_at_once() {
+        let mut b = BandRule::new();
+        assert_eq!(b.step(true), Band { thin: true, changed: true });
+        assert_eq!(b.step(true), Band { thin: true, changed: false });
+        assert!(b.reset(), "it was thin, so the band must be set again");
+        assert!(!b.thin());
+        assert!(!b.reset(), "a second reset has nothing to give back");
+        // and on again: thin at once, there is nothing to wait for
+        assert_eq!(b.step(true), Band { thin: true, changed: true });
+        assert_eq!(b.step(false), Band { thin: false, changed: true });
+    }
+
+    #[test]
+    fn the_bands_thickness_in_each_state() {
+        assert_eq!(reserved_thickness(1.0, false), 80);
+        assert_eq!(reserved_thickness(1.0, true), 56);
+        // (at the smallest dock size the thin band is thinner than Windows' 48 px taskbar strip: see the next test but one)
+        assert_eq!(reserved_thickness(0.75, true), 42);
+        for unit in [0.85, 1.0, 1.2, 1.4, 1.25, 1.5 * 1.4, 2.0] {
+            let (full, thin) = (reserved_thickness(unit, false), reserved_thickness(unit, true));
+            assert!(thin < full, "unit {unit}");
+            // the window gains the difference of the two glasses (24 units), within a pixel of rounding
+            let gain = (full - thin) as f32;
+            assert!((gain - 24.0 * unit).abs() <= 1.0, "unit {unit}: {gain}");
+            // the thin band is the thin glass and the margin above and below it, as the full band is the full glass and its margins
+            assert_eq!(thin, px(THIN_HEIGHT + 2.0 * MARGIN_BOTTOM, unit));
+        }
+    }
+
+    // ---- the wiring's sequences (the Model is what the app feeds)
+
+    /// The app's timer as the wiring runs it: a look at the cursor and at what is open every 60 ms while `needs_polling`, plus a look
+    /// at every fact that arrives and at the deadline the last look asked for.
+    struct Wiring {
+        m: Model,
+        now: u64,
+        wake: Option<u64>,
+        sets: Vec<(u64, bool)>,
+        open: bool,
+    }
+
+    impl Wiring {
+        fn new() -> Wiring {
+            let mut m = Model::new();
+            m.inputs.enabled = true;
+            Wiring { m, now: 0, wake: None, sets: Vec::new(), open: false }
+        }
+
+        fn look(&mut self) {
+            let l = self.m.look(self.now);
+            self.wake = l.wake_at;
+            if l.band.changed {
+                self.sets.push((self.now, l.band.thin));
+            }
+        }
+
+        /// Time passes by `ms`: the poller ticks while it runs, the deadline fires.
+        fn run(&mut self, ms: u64) {
+            let end = self.now + ms;
+            while self.now < end {
+                self.now += 20;
+                if self.wake.is_some_and(|w| w <= self.now) {
+                    self.look();
+                }
+                if self.now.is_multiple_of(60) && self.m.needs_polling() && self.m.observe(Some(false), false, self.open) {
+                    self.look();
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_last_window_going_while_a_menu_is_open_changes_no_band_and_stops_the_poller() {
+        let mut w = Wiring::new();
+        // the setting is on: the thin band from the first look
+        w.look();
+        assert_eq!(w.sets, [(0, true)]);
+        // a window is maximised, the dock goes thin
+        w.m.inputs.maximized = true;
+        w.look();
+        w.run(1_000);
+        // the pointer goes to the dock, a menu opens on an icon of that window; the menu's "close window" takes the window away
+        w.open = true;
+        w.m.inputs.near = true;
+        w.m.inputs.open = true;
+        w.look();
+        w.m.inputs.maximized = false;
+        w.m.inputs.near = false;
+        w.look();
+        w.run(10_000);
+        w.open = false;
+        w.run(1_000);
+        assert_eq!(w.sets, [(0, true)], "the band was set once, at the start");
+        assert!(w.m.band_thin());
+        assert!(!w.m.needs_polling(), "no window on the band: nothing left to look at");
+    }
+
+    #[test]
+    fn the_poller_runs_while_a_window_stands_on_the_band_and_never_otherwise() {
+        let mut m = Model::new();
+        assert!(!m.needs_polling());
+        m.inputs = on(false, false, false);
+        m.look(0);
+        assert!(m.band_thin());
+        assert!(!m.needs_polling(), "the thin band alone is no reason to look at the cursor: it does not change with what is seen");
+        m.inputs.maximized = true;
+        assert!(m.needs_polling());
+        m.inputs.maximized = false;
+        assert!(!m.needs_polling());
+        // setting off: never
+        m.inputs = on(true, false, false);
+        m.switch_off();
+        assert!(!m.needs_polling());
+    }
+
+    #[test]
+    fn switching_the_setting_off_while_thin_gives_everything_back_at_once() {
+        let mut w = Wiring::new();
+        w.m.inputs.maximized = true;
+        w.look();
+        w.run(1_000);
+        assert!(w.m.band_thin());
+        assert!(w.m.switch_off(), "the band was thin: it must be set again");
+        assert_eq!(w.m.inputs, Inputs::default());
+        let l = w.m.look(w.now);
+        assert_eq!((l.thin, l.band.thin, l.band.changed, l.wake_at), (false, false, false, None));
+        assert!(!w.m.switch_off(), "nothing more to give back");
+    }
+
+    #[test]
+    fn a_zone_that_is_not_known_neither_brings_the_pointer_near_nor_sends_it_away() {
+        let mut m = Model::new();
+        m.inputs = on(true, true, false);
+        // (the layout is being worked out and a rectangle cannot be read for a moment)
+        assert!(!m.observe(None, false, false));
+        assert!(m.inputs.near, "a pointer resting on the dock is still on it");
+        m.inputs.near = false;
+        assert!(!m.observe(None, false, false));
+        assert!(!m.inputs.near);
+        // a known zone decides; a held button keeps it near after the pointer slipped out
+        assert!(m.observe(Some(true), false, false));
+        assert!(!m.observe(Some(false), true, false), "a press that began on the dock");
+        assert!(m.observe(Some(false), false, false), "the button is let go and the pointer is away");
+        // no maximised window: never near, whatever the cursor does
+        m.inputs.maximized = false;
+        m.inputs.near = true;
+        assert!(m.observe(Some(true), false, false));
+        assert!(!m.inputs.near);
+    }
+
+    #[test]
+    fn the_work_area_follows_the_band_in_both_directions_at_every_size_and_scale_the_thin_band_included() {
+        // The host-owned work area (taskbar hidden by us) judges what is there by the taskbar's strip: a band thinner than the strip
+        // alone would not be recognised as a band, and the thin band (56 units) IS thinner than the 48 px strip at the small dock
+        // sizes. The host therefore remembers the work area it set itself (`plan_edge_held`): with that, a full -> thin and a
+        // thin -> full change are both "Set" at every size and every Windows scale, and without it the thin -> full one is not.
+        use rf_shellguard::tbmodel::MonitorGeom;
+        use rf_shellguard::tbwork::{Verdict, monitor_less_band, plan_edge, plan_edge_held};
+        let mut seen_thinner = false;
+        for scale in [1.0f32, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0] {
+            let (w, h) = ((2560.0 * scale.max(1.0)) as i32, (1440.0 * scale.max(1.0)) as i32);
+            let monitor = [0, 0, w, h];
+            let strip = (48.0 * scale).round() as i32;
+            let bar = [0, h - strip, w, h];
+            for factor in [0.75f32, 0.85, 1.0, 1.4, 1.5] {
+                let unit = super::super::size::unit(scale, factor);
+                let (full, thin) = (reserved_thickness(unit, false), reserved_thickness(unit, true));
+                for (from, to) in [(full, thin), (thin, full)] {
+                    let m = MonitorGeom { id: "A".into(), rect: monitor, work: monitor_less_band(monitor, from), primary: true };
+                    let held = monitor_less_band(monitor, from);
+                    let plan = plan_edge_held(&[m], &[bar], Some(to), &[held]);
+                    assert_eq!(plan.monitors[0].verdict, Verdict::Set, "scale {scale}, size {factor}: band {from} -> {to} px, strip {strip} px");
+                    assert_eq!(plan.monitors[0].target, monitor_less_band(monitor, to));
+                    assert_eq!(plan.monitors[0].user_work, [0, 0, w, h - strip], "the user's own rectangle is the monitor less the strip, whatever band was held");
+                }
+                // what the memory is for: a thin band no thicker than the strip is nobody's without it
+                // (a band exactly as thick as the strip looks like the strip alone, which is the user's own and may be set)
+                if thin < strip - 1 {
+                    let m = MonitorGeom { id: "A".into(), rect: monitor, work: monitor_less_band(monitor, thin), primary: true };
+                    assert_eq!(plan_edge(&[m], &[bar], Some(full)).monitors[0].verdict, Verdict::Foreign, "scale {scale}, size {factor}");
+                    seen_thinner = true;
+                }
+            }
+        }
+        assert!(seen_thinner, "the smallest sizes have a thin band below the strip: the case the memory is for");
+    }
+
+    // ---- the thin layout
+
+    #[test]
+    fn the_thin_glass_is_the_side_islands_glass_on_the_same_line() {
+        for (area, unit) in [
+            (Rect::new(0, 0, 1920, 1032), 1.0),
+            (Rect::new(0, 0, 2560, 1440), 1.0),
+            (Rect::new(0, 0, 2560, 1440), 1.25),
+            (Rect::new(100, 50, 2980, 1630), 1.5),
+            (Rect::new(0, 0, 1366, 720), 0.85),
+            (Rect::new(0, 0, 3840, 2160), 1.4),
+            (Rect::new(0, 0, 3840, 2160), 1.1 * 1.2),
+        ] {
+            let i = layout::islands(area, unit, W);
+            let thin = thin_glass(i.middle, unit);
+            assert_eq!(thin.bottom, i.left.bottom, "one line at unit {unit}");
+            assert_eq!(thin.bottom, i.right.bottom);
+            assert_eq!(thin.top, i.left.top, "the same height as the left island at unit {unit}");
+            assert_eq!(thin.top, i.right.top);
+            assert_eq!(thin.height(), i.left.height());
+            assert_eq!((thin.left, thin.right), (i.middle.left, i.middle.right), "as wide as it was: nothing beside it moves");
+            // and the device height the view draws is the same number of pixels
+            let sq = Squeeze::at(0.0);
+            assert_eq!(glass_height_px(&sq, unit, i.middle.height() as f32), i.left.height() as f32);
+        }
+    }
+
+    #[test]
+    fn the_full_squeeze_is_exactly_the_dock_of_today() {
+        let s = Squeeze::at(1.0);
+        assert_eq!(s, Squeeze::FULL);
+        assert_eq!((s.glass_h, s.icon), (MIDDLE_HEIGHT, 1.0));
+        assert_eq!(glass_height_px(&s, 1.25, 90.0), 90.0);
+        assert_eq!(Squeeze::at(7.0), Squeeze::FULL, "out of range is full");
+        assert_eq!(Squeeze::at(-1.0), Squeeze::at(0.0));
+    }
+
+    #[test]
+    fn the_numbers_between_thin_and_full_move_together_and_never_overshoot() {
+        let mut last = Squeeze::at(0.0);
+        assert_eq!((last.glass_h, last.icon), (48.0, THIN_ICON / ICON_REST));
+        for k in 1..=100 {
+            let s = Squeeze::at(k as f32 / 100.0);
+            assert!(s.glass_h >= last.glass_h && s.icon >= last.icon && s.glass_h <= MIDDLE_HEIGHT && s.icon <= 1.0, "{s:?}");
+            last = s;
+        }
+        // in the middle of the growth: halfway
+        let h = Squeeze::at(0.5);
+        assert!((h.glass_h - 60.0).abs() < 1e-4 && (h.icon - (1.0 + THIN_ICON / ICON_REST) / 2.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn the_icon_and_its_mark_fit_the_thin_glass() {
+        // the foot is 12 above the glass's bottom (BASELINE), the mark's lower edge 7 under it and 4 high (dock/look.rs, middle.rs)
+        const BASELINE: f32 = 12.0;
+        const DOT_DROP: f32 = 7.0;
+        const DOT_HEIGHT: f32 = 4.0;
+        // (the mark stays inside the glass; the icon too, with at least 4 units over its head)
+        const { assert!(BASELINE - DOT_DROP - DOT_HEIGHT >= 0.0) };
+        const { assert!(BASELINE + THIN_ICON < THIN_HEIGHT) };
+        const { assert!(THIN_HEIGHT - (BASELINE + THIN_ICON) >= 4.0) };
+        // the same at every dock size: all of it scales with the unit, and a device pixel of rounding cannot push the icon out
+        for unit in [0.85, 1.0, 1.2, 1.4, 1.5 * 1.4] {
+            let glass = px(THIN_HEIGHT, unit);
+            let top = px(BASELINE, unit) + px(THIN_ICON, unit);
+            assert!(top < glass, "unit {unit}: the icon's top is {top}, the glass {glass}");
+            assert!(px(BASELINE, unit) - px(DOT_DROP, unit) - px(DOT_HEIGHT, unit) >= -1, "unit {unit}: the mark is inside the glass");
+        }
+    }
+
+    #[test]
+    fn the_bell_is_nothing_while_thin_and_whole_when_grown() {
+        assert_eq!(Squeeze::at(0.0).bell(1.0), 0.0);
+        assert_eq!(Squeeze::at(1.0).bell(1.0), 1.0);
+        assert_eq!(Squeeze::at(1.0).bell(0.3), 0.3, "full: the presence as it is today");
+        assert!((Squeeze::at(0.5).bell(1.0) - 0.5).abs() < 1e-6);
+    }
+
+    // ---- near
+
+    #[test]
+    fn near_is_the_band_the_thin_glass_stands_in_and_24_units_above_it() {
+        let monitor = Rect::new(0, 0, 2560, 1440);
+        let i = layout::islands(monitor, 1.0, W);
+        let z = zone(i.middle, i.left, i.right, monitor, 1.0);
+        let thin = thin_glass(i.middle, 1.0); // 1436 - 48 = 1388 .. 1436
+        assert_eq!((thin.top, thin.bottom), (1388, 1436));
+        // inside the thin glass
+        assert!(z.contains(1280, 1380));
+        // on the 4 px margin below the glass, down to the monitor's last row
+        assert!(z.contains(1280, 1437) && z.contains(1280, 1439));
+        assert!(!z.contains(1280, 1440), "the monitor ends");
+        // the full glass is 24 units higher than the thin one, and grown icons reach 12 more: all of that is near
+        assert_eq!(NEAR_ABOVE, 36.0);
+        assert!(z.contains(1280, 1388 - 24) && z.contains(1280, 1388 - 36));
+        assert!(!z.contains(1280, 1388 - 37), "37 units above the thin glass is beyond it");
+        // whatever the island's own pointer region can hold is inside the zone (the top of an icon grown out of the full glass)
+        assert!(z.contains(1280, i.middle.top - 12));
+        // to the sides: the room the glass widens into
+        assert!(z.contains(thin.left - 40, 1380) && z.contains(thin.right + 39, 1380));
+        assert!(!z.contains(thin.left - 41, 1380));
+        // the whole of the grown glass is inside the zone, widened or not
+        let grown = Rect { left: thin.left - 40, right: thin.right + 40, top: i.middle.top, bottom: thin.bottom };
+        for (x, y) in [(grown.left, grown.top), (grown.right - 1, grown.top), (grown.left, grown.bottom - 1), (grown.right - 1, grown.bottom - 1)] {
+            assert!(z.contains(x, y), "({x},{y})");
+        }
+    }
+
+    #[test]
+    fn the_side_islands_are_not_the_dock() {
+        // squeeze the middle against the left island (a narrow screen): the Start button and the clock are not near the dock
+        let monitor = Rect::new(0, 0, 1000, 700);
+        let i = layout::islands(monitor, 1.0, W);
+        let z = zone(i.middle, i.left, i.right, monitor, 1.0);
+        let y = i.left.top + 24;
+        assert!(!z.contains(i.left.right - 1, y) && !z.contains(i.left.left + 5, y));
+        assert!(!z.contains(i.right.left + 1, y));
+        assert!(z.contains(i.middle.left + 20, y));
+    }
+
+    #[test]
+    fn the_zone_stays_on_the_monitor() {
+        let monitor = Rect::new(-1920, 0, 0, 1080);
+        let i = layout::islands(Rect::new(-1920, 0, 0, 1032), 1.0, W);
+        let z = zone(i.middle, i.left, i.right, monitor, 1.0);
+        assert!(monitor.covers(&z.near), "{:?}", z.near);
+    }
+
+    // ---- which windows count
+
+    fn win() -> WinFacts {
+        WinFacts { visible: true, zoomed: true, on_dock_monitor: true, ..Default::default() }
+    }
+
+    #[test]
+    fn a_visible_maximised_window_on_the_docks_monitor_counts() {
+        assert!(counts_as_maximized(&win()));
+        assert!(any_maximized([WinFacts { zoomed: false, ..win() }, win()]));
+        assert!(!any_maximized(std::iter::empty()));
+    }
+
+    #[test]
+    fn windows_the_user_cannot_see_or_that_are_not_windows_of_a_taskbar_do_not_count() {
+        for f in [
+            WinFacts { zoomed: false, ..win() },
+            WinFacts { visible: false, ..win() },
+            WinFacts { minimized: true, ..win() },
+            WinFacts { cloaked: true, ..win() },
+            WinFacts { on_dock_monitor: false, ..win() },
+            WinFacts { own: true, ..win() },
+            WinFacts { shell: true, ..win() },
+            // an owned dialog without a taskbar button, a tool window, a window that never takes the focus
+            WinFacts { has_owner: true, ..win() },
+            WinFacts { ex_style: windows::Win32::UI::WindowsAndMessaging::WS_EX_TOOLWINDOW.0, ..win() },
+            WinFacts { ex_style: windows::Win32::UI::WindowsAndMessaging::WS_EX_NOACTIVATE.0, ..win() },
+        ] {
+            assert!(!counts_as_maximized(&f), "{f:?}");
+        }
+        // but an owned window that asks for a button does
+        assert!(counts_as_maximized(&WinFacts { has_owner: true, ex_style: windows::Win32::UI::WindowsAndMessaging::WS_EX_APPWINDOW.0, ..win() }));
+    }
+
+    #[test]
+    fn a_window_snapped_to_a_half_or_a_lower_quarter_is_docked_under_the_dock() {
+        // a 2560 x 1440 monitor with a thin band of 42 px: the work area ends at 1398; the middle glass reaches from 819 to 1740
+        let (work_bottom, glass, below) = (1398, Rect::new(819, 1362, 1740, 1436), dock_below_px(1.0));
+        assert_eq!(below, 12);
+        // the left half and the right half (the invisible frame: 7 px beyond the visible edge)
+        assert!(docked_under(Rect::new(-7, 0, 1287, 1405), work_bottom, glass, below));
+        assert!(docked_under(Rect::new(1273, 0, 2567, 1405), work_bottom, glass, below));
+        // a lower quarter; a program without the invisible frame, ending exactly at the edge; a snap rounded one pixel short
+        assert!(docked_under(Rect::new(-7, 699, 1287, 1405), work_bottom, glass, below));
+        assert!(docked_under(Rect::new(0, 0, 1280, 1398), work_bottom, glass, below));
+        assert!(docked_under(Rect::new(0, 0, 1280, 1397), work_bottom, glass, below));
+        // an upper quarter ends at the middle of the screen; a third beside the dock is not under it
+        assert!(!docked_under(Rect::new(-7, 0, 1287, 706), work_bottom, glass, below));
+        assert!(!docked_under(Rect::new(-7, 0, 815, 1405), work_bottom, glass, below));
+        assert!(!docked_under(Rect::new(1745, 0, 2567, 1405), work_bottom, glass, below));
+        // a window that floats above the edge, and one dragged so low that it goes under the dock
+        assert!(!docked_under(Rect::new(600, 300, 1800, 1300), work_bottom, glass, below));
+        assert!(!docked_under(Rect::new(600, 700, 1800, 1500), work_bottom, glass, below));
+        // the reach under the edge follows the monitor's scale (the frame is 7 px at 100 %, 14 at 200 %)
+        assert!(!docked_under(Rect::new(0, 0, 1280, 1398 + 14), work_bottom, glass, below));
+        assert!(docked_under(Rect::new(0, 0, 1280, 1398 + 14), work_bottom, glass, dock_below_px(2.0)));
+    }
+
+    #[test]
+    fn a_docked_window_counts_like_a_maximised_one_and_by_the_same_rules() {
+        let docked = WinFacts { zoomed: false, docked: true, ..win() };
+        assert!(counts_as_maximized(&docked));
+        assert!(!counts_as_maximized(&WinFacts { zoomed: false, docked: false, ..win() }), "a window that only floats there");
+        for f in [
+            WinFacts { visible: false, ..docked },
+            WinFacts { minimized: true, ..docked },
+            WinFacts { cloaked: true, ..docked },
+            WinFacts { own: true, ..docked },
+            WinFacts { shell: true, ..docked },
+            WinFacts { on_dock_monitor: false, ..docked },
+            WinFacts { has_owner: true, ..docked },
+        ] {
+            assert!(!counts_as_maximized(&f), "{f:?}");
+        }
+    }
+}
