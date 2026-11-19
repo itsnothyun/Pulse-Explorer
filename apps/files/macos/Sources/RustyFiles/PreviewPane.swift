@@ -80,7 +80,9 @@ final class PreviewPane: FlippedView {
         let w = scroll.contentSize.width
         let inner = w - 24
         var y: CGFloat = 12
-        let visualH: CGFloat = 232
+        // a file gets a tall picture (a page reads at the pane's width); a folder, its icon in the 232 box
+        let showsFile = quickLook.map { !$0.isHidden } ?? false
+        let visualH: CGFloat = showsFile ? min(max(inner * 1.3, 232), 560) : 232
         visualBox.frame = NSRect(x: 12, y: y, width: inner, height: visualH)
         quickLook?.frame = visualBox.bounds
         iconView.frame = NSRect(x: (inner - 96) / 2, y: (visualH - 96) / 2, width: 96, height: 96)
@@ -149,7 +151,9 @@ final class PreviewPane: FlippedView {
             iconView.isHidden = false
             iconView.image = NSWorkspace.shared.icon(forFile: url.path)
         } else {
-            if quickLook == nil, let q = QLPreviewView(frame: visualBox.bounds, style: .compact) {
+            // .normal draws the file itself (a PDF's pages, a picture, text, a playable video), as the Windows pane does;
+            // .compact only drew the file's icon
+            if quickLook == nil, let q = QLPreviewView(frame: visualBox.bounds, style: .normal) {
                 q.autostarts = false
                 q.shouldCloseWithWindow = false
                 visualBox.addSubview(q)
@@ -158,6 +162,7 @@ final class PreviewPane: FlippedView {
             quickLook?.isHidden = false
             iconView.isHidden = true
             quickLook?.previewItem = url as NSURL
+            quickLook?.refreshPreviewItem()
         }
         setProperties(Self.quickProperties(url, folder: folder))
         // the slow ones (folder contents, picture size, duration) come when they are known
