@@ -66,6 +66,20 @@ Everything runs on your device. FFmpeg ships as WebAssembly inside the app, so n
 - Session continuity in IndexedDB, with optional sync to PostgreSQL
 - Built-in sample gallery so you can try every viewer without any files
 
+## ✦ File manager
+
+On the desktop, Pulse Explorer **is** a file manager: [rustyfiles](https://github.com/gelenmedya/rustyfiles) (MIT) by Özer Güzel, vendored in `apps/files` as a git subtree and wearing Pulse's name, icon, colours and pixel headings. It is a native Rust app with tabs, dual panes, archives you open like folders and a never-blocking UI. Launching Pulse Explorer opens it; double-clicking a file Pulse can view (documents, sheets, slides, images, text, media) opens it in **Quick View**, a floating glass viewer that stays ready in the background. The web build keeps the full Pulse workspace.
+
+Pulse's build changes the look and the wiring, not the file manager itself:
+
+- **Colours**: Pulse's grey line (`#090909` to `#f2f2ed`) in `crates/rf-app/src/theme.rs`, Phosphor White as the accent, grey file-type icons.
+- **Liquid glass**: HyperGlass is the default backdrop and is drawn monochrome; menus, lists and switches use the liquid style everywhere. Quick View sits on Windows' acrylic with the same dark wash and the file manager's Lucide icons.
+- **Headings**: page titles, dialog titles and section headings use **Pulse Pixel**, a TTF built from Pulse's 5×7 glyph table (`pnpm files:font` regenerates it from `packages/ui/src/glyphs.ts`).
+- **Opening files**: Pulse's viewer is a built-in open rule for its types (`crates/rf-win/src/openrules.rs`); your own rules still win.
+- **Updates**: rustyfiles' own auto-update is off, so it never replaces the Pulse build with stock rustyfiles. It updates with Pulse Explorer.
+
+To pull upstream changes: `git subtree pull --prefix=apps/files https://github.com/gelenmedya/rustyfiles main --squash`
+
 ## ✦ Quick start
 
 **Prerequisites**
@@ -121,7 +135,8 @@ apps/
 ├── web/               React + Tailwind + Zustand shell (Vite)
 ├── api/               Fastify REST API + Prisma
 ├── worker/            Sandboxed LibreOffice / FFmpeg conversion worker
-└── desktop/           Tauri v2 desktop shell
+├── desktop/           Tauri v2 desktop shell
+└── files/             rustyfiles file manager (Rust, git subtree), bundled with desktop
 packages/
 ├── shared-types/      Domain interfaces and DTOs
 ├── utilities/         Magic bytes, sanitizers, zip guard
@@ -182,6 +197,8 @@ Found a vulnerability? Please report it privately. See [SECURITY.md](SECURITY.md
 | `pnpm typecheck` | Type-check the workspace |
 | `pnpm test` | Run all Vitest tests |
 | `pnpm test:unit` | Integration tests only |
+| `pnpm files:build` | Build the file manager (`apps/files`, needs Rust stable) |
+| `pnpm files:font` | Rebuild the Pulse Pixel heading font (needs `pip install fonttools`) |
 | `pnpm fixtures:generate` | Generate sample files in `tests/fixtures/generated` |
 | `pnpm test:e2e` | Playwright end-to-end tests |
 
