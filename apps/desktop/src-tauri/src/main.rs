@@ -347,41 +347,90 @@ fn reveal_in_explorer(path: String) -> Result<(), String> {
             .spawn()
             .map_err(|err| err.to_string())?;
     }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("/usr/bin/open")
+            .arg("-R")
+            .arg(&p)
+            .spawn()
+            .map_err(|err| err.to_string())?;
+    }
     Ok(())
 }
 
 /// The bundled file manager (apps/files, rustyfiles in Pulse colours). Installed next to the app as a resource;
-/// a dev build falls back to the release build in the workspace (`pnpm files:build`).
+/// a dev build falls back to the release build in the workspace (`pnpm files:build`, `pnpm files:build:mac`).
+/// On macOS it is the native Mac rustyfiles (apps/files/macos), an app bundle inside ours.
+#[cfg(not(target_os = "macos"))]
+const FILE_MANAGER: (&str, &str) = ("rustyfiles.exe", "../../files/target/release/rustyfiles.exe");
+#[cfg(target_os = "macos")]
+const FILE_MANAGER: (&str, &str) = ("rustyfiles.app", "../../files/macos/build/rustyfiles.app");
+
 fn file_manager_exe(app: &AppHandle) -> Result<PathBuf, String> {
     let bundled = app
         .path()
         .resource_dir()
-        .map(|d| d.join("files").join("rustyfiles.exe"))
+        .map(|d| d.join("files").join(FILE_MANAGER.0))
         .ok();
-    let dev = cfg!(debug_assertions)
-        .then(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../files/target/release/rustyfiles.exe"));
+    let dev = cfg!(debug_assertions).then(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(FILE_MANAGER.1));
     bundled
         .into_iter()
         .chain(dev)
-        .find(|p| p.is_file())
+        .find(|p| p.exists())
         .ok_or_else(|| "The file manager is not installed (build it with `pnpm files:build`)".to_string())
+}
+
+/// What the file manager opens Pulse's file types with (rf-win `openrules`, the Mac app's OpenRules): this executable
+/// on Windows, our app bundle on macOS (where apps are opened as bundles).
+fn pulse_viewer_path() -> Option<PathBuf> {
+    let me = std::env::current_exe().ok()?;
+    #[cfg(target_os = "macos")]
+    {
+        // <bundle>.app/Contents/MacOS/PulseExplorer
+        let bundle = me.parent()?.parent()?.parent()?;
+        if bundle.extension().is_some_and(|e| e == "app") {
+            return Some(bundle.to_path_buf());
+        }
+    }
+    Some(me)
 }
 
 /// Starts the file manager at a folder, or at the folder holding a file; with no path, at its home page.
 /// `PULSE_VIEWER` tells it to open files Pulse can view with this executable (rf-win `openrules`).
+#[cfg(not(target_os = "macos"))]
 fn spawn_file_manager(app: &AppHandle, path: Option<PathBuf>) -> Result<std::process::Child, String> {
     let exe = file_manager_exe(app)?;
     let mut cmd = std::process::Command::new(&exe);
-    if let Ok(me) = std::env::current_exe() {
+    if let Some(me) = pulse_viewer_path() {
         cmd.env("PULSE_VIEWER", me);
     }
-    if let Some(p) = path {
-        let dir = if p.is_file() { p.parent().map(PathBuf::from) } else { Some(p) };
-        if let Some(d) = dir.filter(|d| d.is_dir()) {
-            cmd.arg(d);
-        }
+    if let Some(d) = folder_of(path) {
+        cmd.arg(d);
     }
     cmd.spawn().map_err(|err| err.to_string())
+}
+
+/// macOS: through LaunchServices (`open`), so a running file manager gets the folder in a new tab or window instead
+/// of a second copy starting. `-W` makes the child live as long as the file manager does.
+#[cfg(target_os = "macos")]
+fn spawn_file_manager(app: &AppHandle, path: Option<PathBuf>) -> Result<std::process::Child, String> {
+    let bundle = file_manager_exe(app)?;
+    let mut cmd = std::process::Command::new("/usr/bin/open");
+    cmd.arg("-W");
+    if let Some(me) = pulse_viewer_path() {
+        cmd.arg("--env").arg(format!("PULSE_VIEWER={}", me.display()));
+    }
+    cmd.arg("-a").arg(&bundle);
+    if let Some(d) = folder_of(path) {
+        cmd.arg(d);
+    }
+    cmd.spawn().map_err(|err| err.to_string())
+}
+
+fn folder_of(path: Option<PathBuf>) -> Option<PathBuf> {
+    let p = path?;
+    let dir = if p.is_file() { p.parent().map(PathBuf::from) } else { Some(p) };
+    dir.filter(|d| d.is_dir())
 }
 
 #[tauri::command]
@@ -429,6 +478,11 @@ fn open_with_other_app(path: String) -> Result<(), String> {
             .spawn()
             .map_err(|err| err.to_string())?;
     }
+    // macOS has no "Open with" chooser to show: the file goes to the app Finder opens it with.
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("/usr/bin/open").arg(&p).spawn().map_err(|err| err.to_string())?;
+    }
     Ok(())
 }
 
@@ -475,7 +529,7 @@ fn set_explorer_open_mode(app: AppHandle, state: State<'_, ExplorerOpenMode>, mo
 /// Screen rect (physical px) of the window the user was just in, normally the
 /// Explorer window they double-clicked from. Falls back to the cursor position.
 #[cfg(windows)]
-fn anchor_rect() -> (i32, i32, i32, i32) {
+fn anchor_rect(_app: &AppHandle) -> (i32, i32, i32, i32) {
     use windows::Win32::Foundation::{POINT, RECT};
     use windows::Win32::UI::WindowsAndMessaging::{GetCursorPos, GetForegroundWindow, GetWindowRect, GetWindowThreadProcessId};
     unsafe {
@@ -494,15 +548,35 @@ fn anchor_rect() -> (i32, i32, i32, i32) {
     }
 }
 
+/// Elsewhere: the cursor, which is over the file manager the file was opened from.
 #[cfg(not(windows))]
-fn anchor_rect() -> (i32, i32, i32, i32) {
-    (0, 0, 1280, 800)
+fn anchor_rect(app: &AppHandle) -> (i32, i32, i32, i32) {
+    match app.cursor_position() {
+        Ok(p) => (p.x as i32 - 1, p.y as i32 - 1, 2, 2),
+        Err(_) => (0, 0, 1280, 800),
+    }
 }
 
 /// Sizes the Quick View window to the anchor and centres it over it, clamped to
 /// the work area of the monitor the anchor is on.
 fn place_quickview(app: &AppHandle, win: &tauri::WebviewWindow) {
-    let (ax, ay, aw, ah) = anchor_rect();
+    // macOS: screens of different scales share one coordinate space in points, which physical pixels do not map onto;
+    // size in points and let AppKit centre it on the screen in use (the file manager's).
+    #[cfg(target_os = "macos")]
+    {
+        let _ = app;
+        let (mut w, mut h) = (1100.0_f64, 780.0_f64);
+        if let Ok(Some(m)) = win.current_monitor() {
+            let s = m.scale_factor();
+            w = w.min(m.work_area().size.width as f64 / s - 48.0);
+            h = h.min(m.work_area().size.height as f64 / s - 48.0);
+        }
+        let _ = win.set_size(tauri::LogicalSize::new(w.max(560.0), h.max(420.0)));
+        let _ = win.center();
+        return;
+    }
+    #[allow(unreachable_code)]
+    let (ax, ay, aw, ah) = anchor_rect(app);
     let (cx, cy) = (ax + aw / 2, ay + ah / 2);
     let monitors = app.available_monitors().unwrap_or_default();
     let monitor = monitors
@@ -539,6 +613,9 @@ fn show_quickview(app: &AppHandle, files: Vec<OpenWithFilePayload>) {
     if files.is_empty() {
         return;
     }
+    // macOS: this process runs in the background (no Dock icon); come forward, over the file manager.
+    #[cfg(target_os = "macos")]
+    let _ = app.show();
     if let Some(win) = app.get_webview_window(QUICKVIEW) {
         place_quickview(app, &win);
         let _ = win.emit_to(QUICKVIEW, "pulse://quickview-files", &files);
@@ -562,12 +639,7 @@ fn show_quickview(app: &AppHandle, files: Vec<OpenWithFilePayload>) {
         .transparent(true)
         .background_color(tauri::window::Color(9, 9, 9, 0))
         .theme(Some(tauri::Theme::Dark))
-        .effects(
-            tauri::window::EffectsBuilder::new()
-                .effect(tauri::window::Effect::Acrylic)
-                .color(tauri::window::Color(9, 9, 9, 200))
-                .build(),
-        )
+        .effects(quickview_effects())
         .resizable(true)
         .visible(false)
         .min_inner_size(560.0, 420.0)
@@ -579,6 +651,25 @@ fn show_quickview(app: &AppHandle, files: Vec<OpenWithFilePayload>) {
             let _ = win.set_focus();
         }
         Err(err) => eprintln!("quick view: {err}"),
+    }
+}
+
+/// Windows' acrylic; on macOS the dark HUD vibrancy with rounded corners (the frameless window has none).
+fn quickview_effects() -> tauri::utils::config::WindowEffectsConfig {
+    #[cfg(target_os = "macos")]
+    {
+        tauri::window::EffectsBuilder::new()
+            .effect(tauri::window::Effect::HudWindow)
+            .state(tauri::window::EffectState::Active)
+            .radius(14.0)
+            .build()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        tauri::window::EffectsBuilder::new()
+            .effect(tauri::window::Effect::Acrylic)
+            .color(tauri::window::Color(9, 9, 9, 200))
+            .build()
     }
 }
 
@@ -665,14 +756,71 @@ fn main() {
             let handle = app.handle().clone();
             app.manage(ExplorerOpenMode(Mutex::new(read_explorer_mode(&handle))));
             app.manage(PendingStartupFiles::default());
+            #[cfg(target_os = "macos")]
+            {
+                // The file manager is the app in the Dock; this process only shows Quick View.
+                app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+                app.manage(MacStart::default());
+            }
             if file_manager_start {
                 app.manage(BehindFileManager);
+                // macOS hands files from Finder over after launch (RunEvent::Opened), not as arguments: wait a
+                // moment before deciding this start had no files.
+                #[cfg(target_os = "macos")]
+                {
+                    let handle = handle.clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(std::time::Duration::from_millis(600));
+                        let h = handle.clone();
+                        let _ = handle.run_on_main_thread(move || {
+                            let opened = h.state::<MacStart>().0.lock().map(|g| *g).unwrap_or(false);
+                            if !opened {
+                                start_as_file_manager(&h);
+                            }
+                        });
+                    });
+                }
+                #[cfg(not(target_os = "macos"))]
                 start_as_file_manager(&handle);
             } else {
                 show_quickview(&handle, startup_files.clone());
             }
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running Pulse Explorer");
+        .build(tauri::generate_context!())
+        .expect("error while running Pulse Explorer")
+        .run(|_app, _event| {
+            // macOS: files opened from Finder or the file manager ("Open with", double click) arrive here.
+            #[cfg(target_os = "macos")]
+            match _event {
+                tauri::RunEvent::Opened { urls } => {
+                    let files: Vec<OpenWithFilePayload> = urls
+                        .iter()
+                        .filter_map(|u| u.to_file_path().ok())
+                        .filter_map(|p| inspect_cli_file_arg(&p.to_string_lossy()))
+                        .collect();
+                    if files.is_empty() {
+                        return;
+                    }
+                    if let Some(s) = _app.try_state::<MacStart>() {
+                        if let Ok(mut g) = s.0.lock() {
+                            *g = true;
+                        }
+                    }
+                    show_quickview(_app, files);
+                }
+                // Clicking the Dock icon / launching again while running: bring the file manager forward.
+                tauri::RunEvent::Reopen { has_visible_windows: false, .. } => {
+                    if let Err(err) = spawn_file_manager(_app, None) {
+                        eprintln!("file manager: {err}");
+                    }
+                }
+                _ => {}
+            }
+        });
 }
+
+/// macOS: set once Finder has handed this start a file, so it opens Quick View instead of the file manager.
+#[cfg(target_os = "macos")]
+#[derive(Default)]
+struct MacStart(Mutex<bool>);

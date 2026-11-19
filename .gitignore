@@ -16,3 +16,5 @@ tests/fixtures/generated/
 
 # Tauri build output
 apps/desktop/src-tauri/target/
+# macOS: the file manager staged for bundling (scripts/stage-mac-files.sh)
+apps/desktop/src-tauri/files/

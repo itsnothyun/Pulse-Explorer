@@ -2,7 +2,7 @@
   "name": "omniview",
   "version": "1.0.0",
   "private": true,
-  "description": "OmniView — Production-Quality Universal File & Document Viewer",
+  "description": "OmniView \u2014 Production-Quality Universal File & Document Viewer",
   "packageManager": "pnpm@11.24.0",
   "engines": {
     "node": ">=20.0.0"
@@ -12,7 +12,9 @@
     "desktop": "node apps/desktop/desktop-launcher.mjs",
     "desktop:tauri": "pnpm files:build && pnpm --filter @omniview/desktop tauri:dev",
     "desktop:build": "pnpm files:build && pnpm --filter @omniview/web build && pnpm --filter @omniview/desktop tauri:build",
+    "desktop:build:mac": "bash apps/desktop/src-tauri/scripts/stage-mac-files.sh && pnpm --filter @omniview/web build && pnpm --filter @omniview/desktop tauri:build",
     "files:build": "cargo build --release --manifest-path apps/files/Cargo.toml -p rf-app -p rf-dialog -p rf-shellguard",
+    "files:build:mac": "bash apps/desktop/src-tauri/scripts/stage-mac-files.sh",
     "files:font": "python apps/files/tools/pulse-pixel/build_font.py",
     "dev:all": "turbo run dev",
     "dev:api": "pnpm --filter @omniview/api dev",

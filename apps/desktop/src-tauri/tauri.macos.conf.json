@@ -1,0 +1,10 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "targets": ["app"],
+    "resources": ["files/rustyfiles.app/", "files/LICENSE"],
+    "macOS": {
+      "minimumSystemVersion": "26.0"
+    }
+  }
+}
