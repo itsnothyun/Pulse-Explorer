@@ -175,13 +175,24 @@ final class IconButton: HoverView {
     /// The glass under the button while the pointer is on it (in place of the hover fill).
     private var lens: LensView?
 
-    init(icon: String, size: NSSize, iconSize: CGFloat = 16, tooltip: String? = nil, action: ((IconButton) -> Void)? = nil) {
+    /// What PulseTooltip shows on a rest over the button: its name, and its shortcut beside it.
+    var tip: String?
+    var shortcut: String?
+
+    init(icon: String, size: NSSize, iconSize: CGFloat = 16, tooltip: String? = nil, shortcut: String? = nil, action: ((IconButton) -> Void)? = nil) {
         self.icon = icon
         self.iconSize = iconSize
         self.fixedSize = size
         self.action = action
+        tip = tooltip
+        self.shortcut = shortcut
         super.init(frame: NSRect(origin: .zero, size: size))
-        toolTip = tooltip
+        setAccessibilityLabel(tooltip)
+    }
+
+    override var toolTip: String? {
+        get { tip }
+        set { tip = newValue }
     }
 
     @available(*, unavailable)
@@ -189,11 +200,17 @@ final class IconButton: HoverView {
 
     override var mouseDownCanMoveWindow: Bool { false }
 
-    override func hoverChanged() { updateLens() }
+    override func hoverChanged() {
+        updateLens()
+        if hovered, let tip, !tip.isEmpty, !isOpen { PulseTooltip.schedule(for: self, text: tip, shortcut: shortcut) } else { PulseTooltip.hide(for: self) }
+    }
 
     override func viewDidMoveToSuperview() {
         super.viewDidMoveToSuperview()
-        if superview == nil { lens?.removeFromSuperview() }
+        if superview == nil {
+            lens?.removeFromSuperview()
+            PulseTooltip.hide(for: self)
+        }
     }
 
     override var frame: NSRect { didSet { lens?.frame = frame } }
@@ -271,6 +288,7 @@ final class IconButton: HoverView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        PulseTooltip.hide(for: self)
         guard isEnabled else { return }
         pressed = true
     }

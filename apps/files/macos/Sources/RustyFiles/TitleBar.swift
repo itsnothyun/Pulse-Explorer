@@ -150,7 +150,7 @@ extension NSBezierPath {
 @MainActor
 final class TitleBarView: FlippedView {
     let strip = TabStripView()
-    let plus = IconButton(icon: "plus", size: NSSize(width: 28, height: 28), iconSize: 14, tooltip: String(localized: "New tab"))
+    let plus = IconButton(icon: "plus", size: NSSize(width: 28, height: 28), iconSize: 14, tooltip: String(localized: "New tab"), shortcut: "⌘T")
     /// The active tab's glass: as wide as the tab and 8 px taller downwards, cut by the strip's
     /// box, so its top corners are round and its bottom is flat (glass.rs `LensShape::Tab`).
     private let tabClip = FlippedView()

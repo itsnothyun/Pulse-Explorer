@@ -169,8 +169,8 @@ final class OmnibarView: FlippedView, NSTextFieldDelegate {
 
     let breadcrumb = BreadcrumbView()
     let field = NSTextField()
-    let commandButton = IconButton(icon: "square-chevron-right", size: NSSize(width: 28, height: 28), iconSize: 15, tooltip: String(localized: "Go to a path"))
-    let searchButton = IconButton(icon: "search", size: NSSize(width: 28, height: 28), iconSize: 15, tooltip: String(localized: "Filter this folder"))
+    let commandButton = IconButton(icon: "square-chevron-right", size: NSSize(width: 28, height: 28), iconSize: 15, tooltip: String(localized: "Go to a path"), shortcut: "⌘L")
+    let searchButton = IconButton(icon: "search", size: NSSize(width: 28, height: 28), iconSize: 15, tooltip: String(localized: "Filter this folder"), shortcut: "⌘F")
     private let divider = Divider()
 
     private(set) var mode: Mode = .breadcrumb
@@ -301,13 +301,13 @@ final class OmnibarView: FlippedView, NSTextFieldDelegate {
 /// window buttons are there.)
 @MainActor
 final class NavBarView: FlippedView {
-    let sidebarToggle = IconButton(icon: "panel-left", size: NSSize(width: 32, height: 32), tooltip: String(localized: "Show or hide the sidebar"))
-    let back = IconButton(icon: "arrow-left", size: NSSize(width: 32, height: 32), tooltip: String(localized: "Back"))
-    let forward = IconButton(icon: "arrow-right", size: NSSize(width: 32, height: 32), tooltip: String(localized: "Forward"))
-    let up = IconButton(icon: "arrow-up", size: NSSize(width: 32, height: 32), tooltip: String(localized: "Up"))
-    let refresh = IconButton(icon: "rotate-cw", size: NSSize(width: 32, height: 32), tooltip: String(localized: "Refresh"))
+    let sidebarToggle = IconButton(icon: "panel-left", size: NSSize(width: 32, height: 32), tooltip: String(localized: "Show or hide the sidebar"), shortcut: "⌃⌘S")
+    let back = IconButton(icon: "arrow-left", size: NSSize(width: 32, height: 32), tooltip: String(localized: "Back"), shortcut: "⌘[")
+    let forward = IconButton(icon: "arrow-right", size: NSSize(width: 32, height: 32), tooltip: String(localized: "Forward"), shortcut: "⌘]")
+    let up = IconButton(icon: "arrow-up", size: NSSize(width: 32, height: 32), tooltip: String(localized: "Up one level"), shortcut: "⌘↑")
+    let refresh = IconButton(icon: "rotate-cw", size: NSSize(width: 32, height: 32), tooltip: String(localized: "Refresh"), shortcut: "⌘R")
     let omnibar = OmnibarView()
-    let statusCenter = IconButton(icon: "list-checks", size: NSSize(width: 32, height: 32), tooltip: String(localized: "Operations"))
+    let statusCenter = IconButton(icon: "list-checks", size: NSSize(width: 32, height: 32), tooltip: String(localized: "Status Center: copies, moves and other operations"))
 
     override init(frame: NSRect) {
         super.init(frame: frame)
