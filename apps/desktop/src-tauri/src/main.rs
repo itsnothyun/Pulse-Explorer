@@ -1,5 +1,6 @@
-// Prevents additional console window on Windows in release, DO NOT REMOVE!!
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+// No console window, in dev builds too: the file manager starts this executable to view a file,
+// and a console build would open a terminal next to Quick View. DO NOT REMOVE!!
+#![windows_subsystem = "windows"]
 
 use serde::Serialize;
 use std::path::PathBuf;
@@ -26,7 +27,12 @@ fn inspect_cli_file_arg(raw_arg: &str) -> Option<OpenWithFilePayload> {
     if !path_buf.exists() || !path_buf.is_file() {
         return None;
     }
+    // (canonicalize gives `\\?\C:\...` on Windows: shown to people, the plain form reads better and works the same)
     let canonical = path_buf.canonicalize().unwrap_or(path_buf);
+    let canonical = match canonical.to_str().and_then(|s| s.strip_prefix(r"\\?\")) {
+        Some(plain) if !plain.starts_with(r"UNC\") => PathBuf::from(plain),
+        _ => canonical,
+    };
     let metadata = std::fs::metadata(&canonical).ok()?;
     let filename = canonical
         .file_name()
@@ -344,6 +350,73 @@ fn reveal_in_explorer(path: String) -> Result<(), String> {
     Ok(())
 }
 
+/// The bundled file manager (apps/files, rustyfiles in Pulse colours). Installed next to the app as a resource;
+/// a dev build falls back to the release build in the workspace (`pnpm files:build`).
+fn file_manager_exe(app: &AppHandle) -> Result<PathBuf, String> {
+    let bundled = app
+        .path()
+        .resource_dir()
+        .map(|d| d.join("files").join("rustyfiles.exe"))
+        .ok();
+    let dev = cfg!(debug_assertions)
+        .then(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../files/target/release/rustyfiles.exe"));
+    bundled
+        .into_iter()
+        .chain(dev)
+        .find(|p| p.is_file())
+        .ok_or_else(|| "The file manager is not installed (build it with `pnpm files:build`)".to_string())
+}
+
+/// Starts the file manager at a folder, or at the folder holding a file; with no path, at its home page.
+/// `PULSE_VIEWER` tells it to open files Pulse can view with this executable (rf-win `openrules`).
+fn spawn_file_manager(app: &AppHandle, path: Option<PathBuf>) -> Result<std::process::Child, String> {
+    let exe = file_manager_exe(app)?;
+    let mut cmd = std::process::Command::new(&exe);
+    if let Ok(me) = std::env::current_exe() {
+        cmd.env("PULSE_VIEWER", me);
+    }
+    if let Some(p) = path {
+        let dir = if p.is_file() { p.parent().map(PathBuf::from) } else { Some(p) };
+        if let Some(d) = dir.filter(|d| d.is_dir()) {
+            cmd.arg(d);
+        }
+    }
+    cmd.spawn().map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+fn open_file_manager(app: AppHandle, path: Option<String>) -> Result<(), String> {
+    spawn_file_manager(&app, path.map(PathBuf::from)).map(|_| ())
+}
+
+/// Managed when this process started the file manager and waits behind it as its viewer.
+struct BehindFileManager;
+
+/// A start with no files opens the file manager: Pulse Explorer is the file manager (apps/files), and this
+/// process stays in the background as its viewer (Quick View). Released builds quit once the file manager
+/// closes and Quick View is not showing; a dev build keeps running so the dev server stays up.
+fn start_as_file_manager(app: &AppHandle) {
+    let mut child = match spawn_file_manager(app, None) {
+        Ok(c) => c,
+        Err(err) => {
+            eprintln!("file manager: {err}");
+            app.exit(1);
+            return;
+        }
+    };
+    if cfg!(debug_assertions) {
+        return;
+    }
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let _ = child.wait();
+        let showing = app.get_webview_window(QUICKVIEW).is_some_and(|w| w.is_visible().unwrap_or(false));
+        if !showing {
+            app.exit(0);
+        }
+    });
+}
+
 /// Shows the Windows "Open with" chooser, since Pulse is usually the default app.
 #[tauri::command]
 fn open_with_other_app(path: String) -> Result<(), String> {
@@ -357,13 +430,6 @@ fn open_with_other_app(path: String) -> Result<(), String> {
             .map_err(|err| err.to_string())?;
     }
     Ok(())
-}
-
-fn emit_open_with_events(app: &AppHandle, payloads: &[OpenWithFilePayload]) {
-    if payloads.is_empty() {
-        return;
-    }
-    let _ = app.emit("omniview://open-with-files", payloads);
 }
 
 // ---------------------------------------------------------------- Quick View window
@@ -487,18 +553,32 @@ fn show_quickview(app: &AppHandle, files: Vec<OpenWithFilePayload>) {
     let built = WebviewWindowBuilder::new(app, QUICKVIEW, WebviewUrl::App("index.html".into()))
         .title("Pulse Explorer Quick View")
         .decorations(false)
-        // Opaque with the native DWM shadow: Windows draws the shadow outside the
-        // window (never clipped), rounds the corners and provides resize edges.
+        // The native DWM shadow: Windows draws the shadow outside the window (never
+        // clipped), rounds the corners and provides resize edges.
         .shadow(true)
-        .background_color(tauri::window::Color(9, 9, 9, 255))
+        // Liquid glass, like the file manager: a see-through page over Windows'
+        // acrylic blur, dark so the frost stays monochrome. The page lays a
+        // grey wash of its own on top (html.qv-window in index.css).
+        .transparent(true)
+        .background_color(tauri::window::Color(9, 9, 9, 0))
+        .theme(Some(tauri::Theme::Dark))
+        .effects(
+            tauri::window::EffectsBuilder::new()
+                .effect(tauri::window::Effect::Acrylic)
+                .color(tauri::window::Color(9, 9, 9, 200))
+                .build(),
+        )
         .resizable(true)
         .visible(false)
         .min_inner_size(560.0, 420.0)
         .build();
-    if let Ok(win) = built {
-        place_quickview(app, &win);
-        let _ = win.show();
-        let _ = win.set_focus();
+    match built {
+        Ok(win) => {
+            place_quickview(app, &win);
+            let _ = win.show();
+            let _ = win.set_focus();
+        }
+        Err(err) => eprintln!("quick view: {err}"),
     }
 }
 
@@ -508,15 +588,11 @@ fn consume_quickview_files(state: State<'_, QuickViewQueue>) -> Vec<OpenWithFile
     std::mem::take(&mut *state.0.lock().expect("queue mutex poisoned"))
 }
 
-/// Esc / close in Quick View. If the workspace was never shown, Pulse exits so
-/// it doesn't linger invisibly in the background.
+/// Esc / close in Quick View. Behind the file manager this process is its viewer and stays, hidden, for the
+/// next file; started for one file only (Open with), it exits so it doesn't linger invisibly.
 #[tauri::command]
 fn close_quickview(app: AppHandle) {
-    let main_visible = app
-        .get_webview_window("main")
-        .and_then(|w| w.is_visible().ok())
-        .unwrap_or(false);
-    if !main_visible {
+    if app.try_state::<BehindFileManager>().is_none() {
         app.exit(0);
         return;
     }
@@ -525,53 +601,33 @@ fn close_quickview(app: AppHandle) {
     }
 }
 
-/// "Open in workspace": reveal the full app with the files as tabs.
-#[tauri::command]
-fn open_in_workspace(app: AppHandle, paths: Vec<String>) {
-    let payloads: Vec<OpenWithFilePayload> = paths.iter().filter_map(|p| inspect_cli_file_arg(p)).collect();
-    show_main(&app);
-    let _ = app.emit_to("main", "pulse://open-in-tab", &payloads);
-    if let Some(win) = app.get_webview_window(QUICKVIEW) {
-        let _ = win.hide();
-    }
-}
-
-fn show_main(app: &AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.unminimize();
-        let _ = window.show();
-        let _ = window.set_focus();
-    }
-}
-
 fn main() {
     let startup_files: Vec<OpenWithFilePayload> = std::env::args()
         .skip(1)
         .filter_map(|arg| inspect_cli_file_arg(&arg))
         .collect();
+    let file_manager_start = startup_files.is_empty();
 
     tauri::Builder::default()
         // Must be registered first: a second launch ("Open with" while running)
         // forwards its file arguments here and exits.
-        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+        .plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
+            // (a relative path is the launching process's, not ours)
             let payloads: Vec<OpenWithFilePayload> = argv
                 .iter()
                 .skip(1)
-                .filter_map(|arg| inspect_cli_file_arg(arg))
+                .filter_map(|arg| {
+                    let full = if arg.starts_with('-') { PathBuf::from(arg) } else { PathBuf::from(&cwd).join(arg) };
+                    inspect_cli_file_arg(&full.to_string_lossy())
+                })
                 .collect();
+            // no files: another file manager window; files: Quick View
             if payloads.is_empty() {
-                show_main(app);
-                return;
-            }
-            let mode = app
-                .try_state::<ExplorerOpenMode>()
-                .map(|m| m.0.lock().expect("mode mutex poisoned").clone())
-                .unwrap_or_else(|| "quick-view".to_string());
-            if mode == "quick-view" {
-                show_quickview(app, payloads);
+                if let Err(err) = spawn_file_manager(app, None) {
+                    eprintln!("file manager: {err}");
+                }
             } else {
-                emit_open_with_events(app, &payloads);
-                show_main(app);
+                show_quickview(app, payloads);
             }
         }))
         .plugin(tauri_plugin_dialog::init())
@@ -599,25 +655,20 @@ fn main() {
             set_explorer_open_mode,
             consume_quickview_files,
             close_quickview,
-            open_in_workspace,
             reveal_in_explorer,
-            open_with_other_app
+            open_with_other_app,
+            open_file_manager
         ])
         .setup(move |app| {
+            // Pulse Explorer has no window of its own any more: the file manager is the app and Quick View
+            // its viewer.
             let handle = app.handle().clone();
-            let mode = read_explorer_mode(&handle);
-            let quick = !startup_files.is_empty() && mode == "quick-view";
-            app.manage(ExplorerOpenMode(Mutex::new(mode)));
-            // Workspace files are drained by the main page; Quick View files go to their own window.
-            app.manage(PendingStartupFiles(Mutex::new(if quick { Vec::new() } else { startup_files.clone() })));
-
-            if let Some(main_window) = app.get_webview_window("main") {
-                let _ = main_window.set_decorations(false);
-                if !quick {
-                    let _ = main_window.show();
-                }
-            }
-            if quick {
+            app.manage(ExplorerOpenMode(Mutex::new(read_explorer_mode(&handle))));
+            app.manage(PendingStartupFiles::default());
+            if file_manager_start {
+                app.manage(BehindFileManager);
+                start_as_file_manager(&handle);
+            } else {
                 show_quickview(&handle, startup_files.clone());
             }
             Ok(())

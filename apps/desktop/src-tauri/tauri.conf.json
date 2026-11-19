@@ -11,23 +11,7 @@
   },
   "app": {
     "withGlobalTauri": false,
-    "windows": [
-      {
-        "label": "main",
-        "title": "Pulse Explorer",
-        "width": 1440,
-        "height": 920,
-        "minWidth": 960,
-        "minHeight": 640,
-        "resizable": true,
-        "fullscreen": false,
-        "decorations": false,
-        "dragDropEnabled": true,
-        "shadow": true,
-        "backgroundColor": "#090909",
-        "visible": false
-      }
-    ],
+    "windows": [],
     "security": {
       "csp": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data: asset: http://asset.localhost; media-src 'self' blob: asset: http://asset.localhost; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost http://localhost:4000; object-src 'none'; frame-src 'none'",
       "assetProtocol": {
@@ -165,7 +149,12 @@
       }
     },
     "resources": {
-      "filetype-icons/*.ico": "filetype-icons/"
+      "filetype-icons/*.ico": "filetype-icons/",
+      "../../files/target/release/rustyfiles.exe": "files/rustyfiles.exe",
+      "../../files/target/release/directlook.exe": "files/directlook.exe",
+      "../../files/target/release/rustyfiles-shellguard.exe": "files/rustyfiles-shellguard.exe",
+      "../../files/target/release/rustyfiles_dialog.dll": "files/rustyfiles_dialog.dll",
+      "../../files/LICENSE": "files/LICENSE"
     }
   },
   "mainBinaryName": "PulseExplorer"

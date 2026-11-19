@@ -3,7 +3,6 @@ import type { DetectedFile } from '@omniview/shared-types';
 import { useWorkspaceStore } from '../stores/useWorkspaceStore';
 import {
   closeQuickViewWindow,
-  openPathsInWorkspace,
   readSystemFile,
   subscribeToQuickViewFiles,
   type QuickViewPayload,
@@ -12,8 +11,8 @@ import { QuickView } from './QuickView';
 
 /**
  * Root of the floating Quick View window. It keeps its own in-memory copy of
- * the files (never persisted, so it can't clash with the workspace window) and
- * hands paths back to the workspace on "Open in workspace".
+ * the files (never persisted). On the desktop it is Pulse Explorer's only window:
+ * the file manager (apps/files) is the app, and this is its viewer.
  */
 export function QuickViewWindow() {
   const importFiles = useWorkspaceStore((s) => s.importFiles);
@@ -86,10 +85,6 @@ export function QuickViewWindow() {
       queue={queue}
       pathOf={(id) => paths.current.get(id)}
       onClose={() => void closeQuickViewWindow()}
-      onOpenInWorkspace={(id) => {
-        const path = paths.current.get(id);
-        if (path) void openPathsInWorkspace([path]);
-      }}
       onDownload={download}
     />
   );

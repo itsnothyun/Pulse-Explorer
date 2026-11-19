@@ -172,15 +172,19 @@ export async function closeQuickViewWindow(): Promise<void> {
   await invoke('close_quickview');
 }
 
-export async function openPathsInWorkspace(paths: string[]): Promise<void> {
-  const { invoke } = await import('@tauri-apps/api/core');
-  await invoke('open_in_workspace', { paths });
-}
-
 /** Opens File Explorer with the file selected. */
 export async function revealInExplorer(path: string): Promise<void> {
   const { invoke } = await import('@tauri-apps/api/core');
   await invoke('reveal_in_explorer', { path });
+}
+
+/**
+ * Opens the bundled file manager (rustyfiles in Pulse colours, apps/files) at a
+ * folder, or at the folder of a file; with no path, at its home page.
+ */
+export async function openFileManager(path?: string): Promise<void> {
+  const { invoke } = await import('@tauri-apps/api/core');
+  await invoke('open_file_manager', { path: path ?? null });
 }
 
 /** Shows the Windows "Open with" chooser for the file. */

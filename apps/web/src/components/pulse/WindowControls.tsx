@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Copy, Minus, Square, X } from 'lucide-react';
 import { isDesktop } from '../../services/desktopBridge';
 
 type AppWindow = import('@tauri-apps/api/window').Window;
@@ -6,9 +7,10 @@ type AppWindow = import('@tauri-apps/api/window').Window;
 /**
  * Minimize / maximize / close for the undecorated desktop window, drawn in the
  * Pulse square-pixel grammar (7x7 SVG glyphs, crisp edges). Renders nothing in
- * the browser.
+ * the browser. `lucide`: thin Lucide glyphs instead, as the file manager's
+ * caption buttons look (Quick View).
  */
-export function WindowControls({ onClose }: { onClose?: () => void } = {}) {
+export function WindowControls({ onClose, lucide = false }: { onClose?: () => void; lucide?: boolean } = {}) {
   const [win, setWin] = useState<AppWindow | null>(null);
   const [maximized, setMaximized] = useState(false);
 
@@ -26,10 +28,18 @@ export function WindowControls({ onClose }: { onClose?: () => void } = {}) {
 
   if (!win) return null;
 
+  const thin = { size: 14, strokeWidth: 1.25, 'aria-hidden': true } as const;
+  const glyph = {
+    minimize: lucide ? <Minus {...thin} /> : <PixelGlyph rows={[0, 0, 0, 0, 0, 0, 127]} />,
+    restore: lucide ? <Copy {...thin} size={13} className="-scale-x-100" /> : <PixelGlyph rows={[31, 17, 125, 69, 71, 68, 124]} />,
+    maximize: lucide ? <Square {...thin} size={12} /> : <PixelGlyph rows={[127, 65, 65, 65, 65, 65, 127]} />,
+    close: lucide ? <X {...thin} size={16} /> : <PixelGlyph rows={[65, 34, 20, 8, 20, 34, 65]} />,
+  };
+
   return (
     <div className="win-controls" role="group" aria-label="Window controls">
       <button type="button" className="win-btn" onClick={() => void win.minimize()} aria-label="Minimize" title="Minimize">
-        <PixelGlyph rows={[0, 0, 0, 0, 0, 0, 127]} />
+        {glyph.minimize}
       </button>
       <button
         type="button"
@@ -38,14 +48,10 @@ export function WindowControls({ onClose }: { onClose?: () => void } = {}) {
         aria-label={maximized ? 'Restore' : 'Maximize'}
         title={maximized ? 'Restore' : 'Maximize'}
       >
-        {maximized ? (
-          <PixelGlyph rows={[31, 17, 125, 69, 71, 68, 124]} />
-        ) : (
-          <PixelGlyph rows={[127, 65, 65, 65, 65, 65, 127]} />
-        )}
+        {maximized ? glyph.restore : glyph.maximize}
       </button>
       <button type="button" className="win-btn win-btn-close" onClick={() => (onClose ? onClose() : void win.close())} aria-label="Close" title="Close">
-        <PixelGlyph rows={[65, 34, 20, 8, 20, 34, 65]} />
+        {glyph.close}
       </button>
     </div>
   );

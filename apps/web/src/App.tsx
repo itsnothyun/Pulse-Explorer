@@ -18,7 +18,7 @@ import { useFileLongPress } from './hooks/useFileLongPress';
 import { useConvertStore } from './stores/useConvertStore';
 import { useEnterOnChange } from './components/pulse/motion';
 import { WindowControls } from './components/pulse/WindowControls';
-import { TYPE_EXTENSIONS, isDesktop, openDefaultAppsSettings, startWindowDrag, subscribeToOpenWithFiles, syncExplorerOpenMode } from './services/desktopBridge';
+import { TYPE_EXTENSIONS, isDesktop, openDefaultAppsSettings, openFileManager, startWindowDrag, subscribeToOpenWithFiles, syncExplorerOpenMode } from './services/desktopBridge';
 import {
   Archive,
   BookMarked,
@@ -541,7 +541,10 @@ export const App: React.FC = () => {
     { id: 'act-settings', group: 'Actions', label: 'Settings', keywords: 'preferences theme motion', icon: <PixelIcon name="settings" size={7} />, run: () => openSettings('general') },
     { id: 'act-shortcuts', group: 'Actions', label: 'Keyboard shortcuts', icon: <Keyboard className="w-3.5 h-3.5" />, run: () => openSettings('shortcuts') },
     ...(isDesktop()
-      ? [{ id: 'act-default', group: 'Actions' as const, label: 'Set Pulse as default app…', keywords: 'associate open with', run: () => void openDefaultAppsSettings() }]
+      ? [
+          { id: 'act-default', group: 'Actions' as const, label: 'Set Pulse as default app…', keywords: 'associate open with', run: () => void openDefaultAppsSettings() },
+          { id: 'act-files', group: 'Actions' as const, label: 'Open file manager', keywords: 'explorer folders browse rustyfiles', icon: <PixelIcon name="folder" size={7} />, run: () => void openFileManager() },
+        ]
       : []),
     ...files
       .filter((f) => !f.isTrashed)
@@ -806,6 +809,9 @@ export const App: React.FC = () => {
                       go: () => goLibrary('favorites'),
                       testId: 'nav-favorites',
                     },
+                    ...(isDesktop()
+                      ? [{ key: 'files', label: 'File manager', icon: 'folder' as const, active: false, go: () => void openFileManager(), testId: 'nav-file-manager' }]
+                      : []),
                   ] as { key: string; label: string; icon: PixelIconName; count?: number; active: boolean; go: () => void; testId: string }[]
                 ).map((item) => {
                   return (

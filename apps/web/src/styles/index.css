@@ -564,15 +564,79 @@
   .qv-backdrop, .qv-panel, .qv-side { animation: none !important; transition: none !important; }
 }
 
-/* Quick View as its own desktop window: the panel fills the window edge to
-   edge. Windows draws the shadow, rounded corners and border natively, so the
-   panel draws none (a CSS shadow inside the window would be clipped). */
-html.qv-window, html.qv-window body { background: var(--color-ground) !important; overflow: hidden; }
+/* Quick View as its own desktop window: a window of the file manager (apps/files).
+   The page is see-through over Windows' acrylic blur (main.rs show_quickview) and
+   lays Pulse's dark wash on top, so the frost stays monochrome. Measures and
+   colours follow crates/rf-app/src/theme.rs: 40 px title bar, 8 px radii, the
+   grey line #090909..#f2f2ed, Segoe UI Variable. Windows draws the shadow,
+   rounded corners and border natively. */
+html.qv-window, html.qv-window body { background: transparent !important; overflow: hidden; }
 html.qv-window body::before { display: none; }
-.qv-standalone { background: var(--color-ground); transition: opacity 160ms var(--ease-out); }
-.qv-standalone .qv-panel { border-radius: 0; box-shadow: none; animation: qv-fade-in 200ms var(--ease-out) both; }
+.qv-standalone { background: transparent; transition: opacity 160ms var(--ease-out); }
+.qv-standalone .qv-panel {
+  border-radius: 0;
+  background: rgba(9, 9, 9, 0.62);
+  animation: qv-glass-in 220ms var(--ease-out) both;
+}
+.qv-standalone .qv-panel::after { display: none; }
 .qv-standalone.qv-leaving .qv-panel { transform: none; }
-@keyframes qv-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes qv-glass-in { from { opacity: 0; transform: scale(0.985); } to { opacity: 1; transform: none; } }
+
+.rf-window { font-family: "Segoe UI Variable Text", "Segoe UI", var(--font-sans); color: #f2f2ed; font-size: 14px; }
+
+/* Title bar with the file as a tab */
+.rf-titlebar { height: 40px; padding-left: 8px; gap: 4px; }
+.rf-tab {
+  display: flex; align-items: center; gap: 8px; height: 32px; max-width: min(420px, 60vw); min-width: 0;
+  padding: 0 4px 0 12px; border-radius: 8px;
+  background: rgba(242, 242, 237, 0.06);
+  box-shadow: inset 0 1px 0 rgba(242, 242, 237, 0.06);
+  font-size: 14px; color: #f2f2ed;
+}
+.rf-tab-close {
+  display: grid; place-items: center; width: 24px; height: 24px; flex: none; border-radius: 6px; color: #b3b3ad;
+  transition: background-color 140ms var(--ease-out), color 140ms var(--ease-out);
+}
+.rf-tab-close:hover { background: rgba(242, 242, 237, 0.09); color: #f2f2ed; }
+.rf-window .win-controls { border-left: 0; margin-left: 0; }
+.rf-window .win-btn { width: 46px; color: #b3b3ad; }
+.rf-window .win-btn:hover { background: rgba(242, 242, 237, 0.06); color: #f2f2ed; }
+.rf-window .win-btn-close:hover { background: rgba(232, 17, 35, 0.9); color: #fff; }
+
+/* Command bar: the file manager's toolbar buttons */
+.rf-commandbar { height: 48px; padding: 0 12px; gap: 2px; }
+.rf-cmd {
+  display: inline-grid; place-items: center; min-width: 32px; height: 32px; padding: 0 6px; border-radius: 6px;
+  color: #f2f2ed; font-size: 13px;
+  transition: background-color 140ms var(--ease-out), transform 120ms var(--ease-out);
+}
+.rf-cmd:hover { background: rgba(242, 242, 237, 0.05); }
+.rf-cmd:active { background: rgba(242, 242, 237, 0.09); transform: scale(0.96); }
+.rf-cmd:disabled { color: #757573; background: none; pointer-events: none; }
+.rf-cmd:focus-visible { outline: 2px solid #f2f2ed; outline-offset: -2px; }
+.rf-cmd-on { background: rgba(242, 242, 237, 0.08); box-shadow: inset 0 0 0 1px rgba(242, 242, 237, 0.10); }
+.rf-cmd-wide { min-width: 52px; }
+.rf-cmd-text { padding: 0 6px; font-size: 13px; color: #b3b3ad; }
+.rf-cmd-sep { width: 1px; height: 20px; margin: 0 6px; background: #303030; }
+
+/* Content pane: rounded, a hairline edge, Pulse's raised ground over the glass */
+.rf-content {
+  margin: 0 8px; border-radius: 8px;
+  background: rgba(14, 14, 14, 0.70);
+  box-shadow: inset 0 0 0 1px #2a2a28;
+}
+.rf-content [class*="bg-slate-950/"], .rf-content [class*="bg-slate-900/"] { background-color: rgba(9, 9, 9, 0.18); }
+
+/* Status bar */
+.rf-status { height: 32px; padding: 0 16px; gap: 14px; font-size: 12px; color: #b3b3ad; }
+.rf-status-on { color: #f2f2ed; }
+.rf-status-path { min-width: 0; color: #757573; font-family: var(--font-mono); font-size: 11px; transition: color 140ms var(--ease-out); }
+.rf-status-path:hover { color: #f2f2ed; }
+
+@media (prefers-reduced-motion: reduce) {
+  .qv-standalone .qv-panel { animation: none !important; }
+  .rf-cmd, .rf-tab-close { transition: none; }
+}
 
 /* Recent view rows */
 .recent-row {

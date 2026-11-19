@@ -10,8 +10,10 @@
   "scripts": {
     "dev": "pnpm --filter @omniview/web dev",
     "desktop": "node apps/desktop/desktop-launcher.mjs",
-    "desktop:tauri": "pnpm --filter @omniview/desktop tauri:dev",
-    "desktop:build": "pnpm --filter @omniview/web build && pnpm --filter @omniview/desktop tauri:build",
+    "desktop:tauri": "pnpm files:build && pnpm --filter @omniview/desktop tauri:dev",
+    "desktop:build": "pnpm files:build && pnpm --filter @omniview/web build && pnpm --filter @omniview/desktop tauri:build",
+    "files:build": "cargo build --release --manifest-path apps/files/Cargo.toml -p rf-app -p rf-dialog -p rf-shellguard",
+    "files:font": "python apps/files/tools/pulse-pixel/build_font.py",
     "dev:all": "turbo run dev",
     "dev:api": "pnpm --filter @omniview/api dev",
     "dev:worker": "pnpm --filter @omniview/worker dev",
