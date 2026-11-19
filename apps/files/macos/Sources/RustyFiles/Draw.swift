@@ -147,6 +147,8 @@ class HoverView: FlippedView {
 /// buttons (28×28) and the dropdowns (label + chevron).
 @MainActor
 final class IconButton: HoverView {
+    override func menu(for event: NSEvent) -> NSMenu? { menuProvider?() ?? super.menu(for: event) }
+
     var icon: String { didSet { needsDisplay = true } }
     var iconSize: CGFloat
     var label: String? { didSet { invalidateIntrinsicContentSize(); needsDisplay = true } }
@@ -160,6 +162,8 @@ final class IconButton: HoverView {
     var ring: Double? { didSet { if ring != oldValue { needsDisplay = true } } }
     var tint: (Palette) -> NSColor = { $0.text }
     var action: ((IconButton) -> Void)?
+    /// A right click's menu (the "+" button: a folder tab or a browser tab).
+    var menuProvider: (() -> NSMenu?)?
     private var pressed = false { didSet { needsDisplay = true } }
     private let fixedSize: NSSize
     /// The glass under the button while the pointer is on it (in place of the hover fill).

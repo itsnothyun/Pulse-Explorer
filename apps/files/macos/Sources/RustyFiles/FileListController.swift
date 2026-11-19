@@ -53,6 +53,8 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
     var filter = "" { didSet { if filter != oldValue { rearrange() } } }
 
     var onOpenFolder: ((URL) -> Void)?
+    /// An .html file opened: Pulse's build shows it in a browser tab (WebTabs.swift).
+    var onOpenWeb: ((URL) -> Void)?
     var onOpenDiskImage: ((URL) -> Void)?
     var onBack: (() -> Void)?
     var onChange: (() -> Void)?
@@ -991,6 +993,11 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
             return
         }
         for u in files {
+            // Pulse's browser tabs: an .html file opens as a page, unless a list of the user's says otherwise
+            if WebAddress.isHTMLFile(u), OpenRules.rule(for: u) == nil, let onOpenWeb {
+                onOpenWeb(u)
+                continue
+            }
             // Settings › File types: the user's own app for this kind of file
             if let app = OpenRules.opener(for: u) {
                 NSWorkspace.shared.open([u], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration())

@@ -22,8 +22,11 @@ export function QuickViewWindow() {
 
   useEffect(() => {
     const root = document.documentElement;
+    // macOS draws the window's frame and traffic lights itself (apps/desktop main.rs show_quickview)
+    const mac = /Mac/i.test(navigator.platform);
     root.classList.add('qv-window');
-    return () => root.classList.remove('qv-window');
+    if (mac) root.classList.add('qv-mac');
+    return () => root.classList.remove('qv-window', 'qv-mac');
   }, []);
 
   useEffect(() => {

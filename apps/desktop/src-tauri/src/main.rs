@@ -627,9 +627,15 @@ fn show_quickview(app: &AppHandle, files: Vec<OpenWithFilePayload>) {
     if let Some(queue) = app.try_state::<QuickViewQueue>() {
         *queue.0.lock().expect("queue mutex poisoned") = files;
     }
-    let built = WebviewWindowBuilder::new(app, QUICKVIEW, WebviewUrl::App("index.html".into()))
-        .title("Pulse Explorer Quick View")
-        .decorations(false)
+    let builder = WebviewWindowBuilder::new(app, QUICKVIEW, WebviewUrl::App("index.html".into()))
+        .title("Pulse Explorer Quick View");
+    // macOS: a real window frame under a see-through title bar, so the corners, shadow and traffic lights are the
+    // system's, the same as the file manager's (the page leaves room for the lights: html.qv-mac in index.css).
+    #[cfg(target_os = "macos")]
+    let builder = builder.decorations(true).title_bar_style(tauri::TitleBarStyle::Overlay).hidden_title(true);
+    #[cfg(not(target_os = "macos"))]
+    let builder = builder.decorations(false);
+    let built = builder
         // The native DWM shadow: Windows draws the shadow outside the window (never
         // clipped), rounds the corners and provides resize edges.
         .shadow(true)
@@ -661,7 +667,6 @@ fn quickview_effects() -> tauri::utils::config::WindowEffectsConfig {
         tauri::window::EffectsBuilder::new()
             .effect(tauri::window::Effect::HudWindow)
             .state(tauri::window::EffectState::Active)
-            .radius(14.0)
             .build()
     }
     #[cfg(not(target_os = "macos"))]
@@ -790,6 +795,14 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("error while running Pulse Explorer")
         .run(|_app, _event| {
+            // The window's own close (macOS: the red traffic light) does what Esc does.
+            if let tauri::RunEvent::WindowEvent { label, event: tauri::WindowEvent::CloseRequested { api, .. }, .. } = &_event {
+                if label == QUICKVIEW {
+                    api.prevent_close();
+                    close_quickview(_app.clone());
+                    return;
+                }
+            }
             // macOS: files opened from Finder or the file manager ("Open with", double click) arrive here.
             #[cfg(target_os = "macos")]
             match _event {

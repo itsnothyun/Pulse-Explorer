@@ -579,6 +579,8 @@ html.qv-window body::before { display: none; }
   animation: qv-glass-in 220ms var(--ease-out) both;
 }
 .qv-standalone .qv-panel::after { display: none; }
+/* macOS: the system frame rounds the corners; the title bar leaves room for the traffic lights */
+html.qv-mac .rf-titlebar { height: 44px; padding-left: 80px; }
 .qv-standalone.qv-leaving .qv-panel { transform: none; }
 @keyframes qv-glass-in { from { opacity: 0; transform: scale(0.985); } to { opacity: 1; transform: none; } }
 

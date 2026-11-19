@@ -62,6 +62,7 @@ enum MainMenu {
         let m = NSMenu(title: String(localized: "File"))
         m.addItem(item(String(localized: "New Window"), #selector(AppDelegate.newWindow(_:)), "n"))
         m.addItem(item(String(localized: "New Tab"), #selector(W.newTab(_:)), "t"))
+        m.addItem(item(String(localized: "New Browser Tab"), #selector(W.newBrowserTab(_:)), "t", [.command, .option]))
         m.addItem(item(String(localized: "New Folder"), #selector(W.newFolder(_:)), "n", [.command, .shift]))
         m.addItem(.separator())
         m.addItem(item(String(localized: "Open"), #selector(W.openSelection(_:)), key(NSDownArrowFunctionKey)))

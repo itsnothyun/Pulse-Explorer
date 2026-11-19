@@ -142,6 +142,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Folders dropped on the Dock icon or opened with `open -a rustyfiles <folder>`.
     func application(_ application: NSApplication, open urls: [URL]) {
         for url in urls {
+            // Pulse's browser tabs: a web page or an .html file sent here opens as a page in the window in front
+            if WebAddress.isWeb(url) {
+                if let front = frontController {
+                    front.openTab(url, activate: true)
+                    front.window?.makeKeyAndOrderFront(nil)
+                } else {
+                    openWindow(at: url)
+                }
+                continue
+            }
             var isDir: ObjCBool = false
             if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue {
                 // General › Folders opened from other apps open in a new window; off: a tab

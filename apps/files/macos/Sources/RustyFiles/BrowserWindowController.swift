@@ -14,7 +14,11 @@ final class BrowserTab {
     var scrollY: CGFloat?
     var loadID = 0
 
-    init(url: URL) { self.url = url.standardizedFileURL }
+    init(url: URL) { self.url = url.isFileURL ? url.standardizedFileURL : url }
+
+    /// Pulse Explorer's browser tabs (WebTabs.swift): a web page or an .html file, shown by `page`.
+    var isWeb: Bool { WebAddress.isWeb(url) }
+    var page: WebPage?
 
     /// The Settings page is a place a tab goes to, like a folder (Location::Settings on Windows).
     static let settingsURL = URL(string: "rustyfiles:settings")!
@@ -23,13 +27,17 @@ final class BrowserTab {
     var isSettings: Bool { url == Self.settingsURL }
     var isHome: Bool { url == Self.homeURL }
     /// A page of the app's own rather than a folder.
-    var isPage: Bool { isSettings || isHome }
+    var isPage: Bool { isSettings || isHome || isWeb }
     /// A tag's results (rustyfiles:tag/<name>): the files that have it, from anywhere.
     var tagName: String? { TagStore.name(of: url) }
 
     var info: TabInfo {
         if isSettings { return TabInfo(title: String(localized: "Settings"), icon: "settings") }
         if isHome { return TabInfo(title: String(localized: "Home"), icon: "house") }
+        if isWeb {
+            let title = page?.title ?? (url == WebAddress.blank ? String(localized: "New browser tab") : (url.isFileURL ? url.lastPathComponent : url.host ?? url.absoluteString))
+            return TabInfo(title: title, icon: "globe")
+        }
         if let tag = tagName { return TabInfo(title: tag, icon: "tag") }
         let fm = FileManager.default
         let home = fm.homeDirectoryForCurrentUser.standardizedFileURL
@@ -155,6 +163,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         // no sidebar: the card keeps the 8 px margin on the left too
         let left = sidebarShown ? sw : 8
         list.card.frame = NSRect(x: left, y: top, width: b.width - left - Metrics.cardRightMargin, height: b.height - top - Metrics.bottomSpacer)
+        for t in tabs { t.page?.container.frame = list.card.frame }
     }
 
     func windowDidBecomeKey(_ notification: Notification) { list.updateCommands() }
@@ -226,6 +235,14 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     private func wire() {
         navBar.sidebarToggle.action = { [weak self] _ in self?.toggleSidebar(nil) }
         titleBar.plus.action = { [weak self] _ in self?.newTab(nil) }
+        // the "+" button's right click: a folder tab or a browser tab
+        titleBar.plus.menuProvider = { [weak self] in
+            let b = MenuBuilder()
+            b.add(String(localized: "New tab"), "plus", key: "t") { self?.newTab(nil) }
+            b.add(String(localized: "New browser tab"), "globe", key: "t", mods: [.command, .option]) { self?.newBrowserTab(nil) }
+            return b.done()
+        }
+        list.onOpenWeb = { [weak self] url in self?.openTab(url, activate: true) }
         titleBar.strip.onSelect = { [weak self] i in self?.activate(i) }
         titleBar.strip.onClose = { [weak self] i in self?.closeTab(at: i) }
 
@@ -299,6 +316,17 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     }
 
     private func showTab() {
+        // only the active tab's page shows; the card stays under it
+        for t in tabs where t !== tab { t.page?.container.isHidden = true }
+        if tab.isWeb {
+            let page = webPage(for: tab)
+            page.container.frame = list.card.frame
+            page.container.isHidden = false
+            watch()
+            updateChrome()
+            window?.makeFirstResponder(page.view)
+            return
+        }
         if tab.isSettings {
             list.showSettings()
         } else if tab.isHome {
@@ -374,6 +402,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         saveTabState()
         let current = tabs[active]
         closedTabs += indices.map { tabs[$0].url }
+        indices.forEach { dropPage(tabs[$0]) }
         tabs = keep.map { tabs[$0] }
         active = tabs.firstIndex { $0 === current } ?? min(keep.firstIndex { $0 > indices.min()! } ?? 0, tabs.count - 1)
         showTab()
@@ -385,6 +414,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         let b = MenuBuilder()
         let n = tabs.count
         b.add(String(localized: "New tab"), "plus", key: "t") { [weak self] in self?.newTab(nil) }
+        b.add(String(localized: "New browser tab"), "globe", key: "t", mods: [.command, .option]) { [weak self] in self?.newBrowserTab(nil) }
         b.add(String(localized: "Duplicate tab"), "copy") { [weak self] in
             guard let self else { return }
             self.activate(i)
@@ -417,6 +447,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         }
         if i == active { saveTabState() }
         closedTabs.append(tabs[i].url)
+        dropPage(tabs[i])
         tabs.remove(at: i)
         if i < active || active >= tabs.count { active = max(active - 1, 0) }
         showTab()
@@ -431,6 +462,14 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     func navigate(to url: URL, selecting name: String? = nil) {
         let url = url.isFileURL ? url.standardizedFileURL : url
         guard url != tab.url else { return }
+        // a page going to another page stays in its WebKit history
+        if tab.isWeb, WebAddress.isWeb(url), let page = tab.page {
+            tab.url = url
+            page.load(url)
+            navBar.omnibar.end()
+            refreshTabs()
+            return updateChrome()
+        }
         saveTabState()
         tab.back.append(tab.url)
         tab.forward.removeAll()
@@ -444,6 +483,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
 
     /// Lists the tab's folder off the main thread: a slow or hung disk never stalls the window.
     private func load(_ t: BrowserTab, keepScroll: Bool = false) {
+        // a tab that left its page for a folder drops the page
+        if !t.isWeb, t.page != nil { dropPage(t) }
         t.loadID += 1
         let id = t.loadID
         let url = t.url
@@ -592,6 +633,18 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     }
 
     private func updateChrome() {
+        if tab.isWeb {
+            let page = tab.page
+            navBar.back.isEnabled = (page?.view.canGoBack ?? false) || !tab.back.isEmpty
+            navBar.forward.isEnabled = (page?.view.canGoForward ?? false) || !tab.forward.isEmpty
+            navBar.up.isEnabled = false
+            let shown = page?.url ?? tab.url
+            let text = shown == WebAddress.blank ? "" : (shown.isFileURL ? shown.path : shown.absoluteString)
+            navBar.omnibar.breadcrumb.segments = [BreadcrumbView.Segment(title: text.isEmpty ? String(localized: "New browser tab") : text, url: shown)]
+            navBar.omnibar.currentPath = text
+            sidebar.selectedURL = nil
+            return
+        }
         navBar.back.isEnabled = !tab.back.isEmpty
         navBar.forward.isEnabled = !tab.forward.isEmpty
         navBar.up.isEnabled = !tab.isHome && (tab.isSettings || tab.tagName != nil || tab.url.path != "/")
@@ -620,9 +673,16 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
             }
         }
         let path = (text.trimmingCharacters(in: .whitespaces) as NSString).expandingTildeInPath
-        let url = path.hasPrefix("/") ? URL(fileURLWithPath: path) : tab.url.appendingPathComponent(path)
+        // a web address opens as a page (Pulse's browser tabs); a file or folder by that name comes first
+        let base = tab.url.isFileURL && !tab.isWeb ? tab.url : FileManager.default.homeDirectoryForCurrentUser
+        let url = path.hasPrefix("/") ? URL(fileURLWithPath: path) : base.appendingPathComponent(path)
         var isDir: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) else {
+        let exists = FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir)
+        if let web = WebAddress.parse(trimmed), !(exists && !path.hasPrefix("http")) {
+            return navigate(to: web)
+        }
+        if exists, !isDir.boolValue, WebAddress.isHTMLFile(url) { return navigate(to: url) }
+        guard exists else {
             // Files › Run programs from the address bar
             if AppSettings.addressCommands, !tab.isPage, AddressCommand.run(text, in: tab.url) { return }
             showError(String(localized: "“\(text)” can’t be found."))
@@ -647,6 +707,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     // MARK: actions (menus, buttons, keys)
 
     @objc func goBack(_ sender: Any?) {
+        if tab.isWeb, let page = tab.page, page.view.canGoBack { page.view.goBack(); return }
         guard let url = tab.back.popLast() else { return }
         saveTabState()
         tab.forward.append(tab.url)
@@ -658,6 +719,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     }
 
     @objc func goForward(_ sender: Any?) {
+        if tab.isWeb, let page = tab.page, page.view.canGoForward { page.view.goForward(); return }
         guard let url = tab.forward.popLast() else { return }
         saveTabState()
         tab.back.append(tab.url)
@@ -671,7 +733,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     @objc func goUp(_ sender: Any?) {
         // Settings goes up to Home, as on Windows
         if tab.isSettings { return goHome(sender) }
-        if tab.isHome { return }
+        if tab.isHome || tab.isWeb { return }
         if tab.tagName != nil { return goHome(sender) }
         let parent = tab.url.deletingLastPathComponent()
         guard parent.path != tab.url.path else { return }
@@ -691,6 +753,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
 
     @objc func refresh(_ sender: Any?) {
         if tab.isHome { return list.reloadHome() }
+        if tab.isWeb { tab.page?.view.reload(); return }
         reload()
     }
     @objc func openSelection(_ sender: Any?) { list.openSelected() }
@@ -776,12 +839,42 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         root.needsLayout = true
     }
 
+    // MARK: browser tabs (WebTabs.swift)
+
+    /// A new tab on a blank page with the address field ready for a URL (workspace.rs `open_browser_tab`).
+    @objc func newBrowserTab(_ sender: Any?) {
+        openTab(WebAddress.blank, activate: true)
+        navBar.omnibar.begin(.path)
+    }
+
+    /// The tab's page, made the first time the tab shows.
+    private func webPage(for t: BrowserTab) -> WebPage {
+        if let p = t.page { return p }
+        let p = WebPage()
+        t.page = p
+        root.addSubview(p.container, positioned: .above, relativeTo: list.card)
+        p.onChange = { [weak self, weak t] in
+            guard let self, let t, let page = t.page else { return }
+            if let u = page.url, u != t.url, WebAddress.isWeb(u) { t.url = u }
+            self.refreshTabs()
+            if t === self.tab { self.updateChrome() }
+        }
+        p.onNewTab = { [weak self] url in self?.openTab(url, activate: true) }
+        if t.url != WebAddress.blank { p.load(t.url) }
+        return p
+    }
+
+    private func dropPage(_ t: BrowserTab) {
+        t.page?.container.removeFromSuperview()
+        t.page = nil
+    }
+
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         let selected = !list.selectedNames.isEmpty
         switch item.action {
         case #selector(goBack(_:)): return !tab.back.isEmpty
         case #selector(goForward(_:)): return !tab.forward.isEmpty
-        case #selector(goUp(_:)): return tab.url.path != "/"
+        case #selector(goUp(_:)): return !tab.isWeb && tab.url.path != "/"
         case #selector(openSelection(_:)), #selector(cut(_:)), #selector(BrowserWindowController.copy(_:) as (BrowserWindowController) -> (Any?) -> Void), #selector(moveToTrash(_:)),
             #selector(toggleQuickLook(_:)):
             return selected
