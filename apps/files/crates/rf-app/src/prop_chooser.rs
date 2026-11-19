@@ -241,7 +241,7 @@ impl Render for ChooserView {
                         v_flex()
                             .p_4()
                             .gap_3()
-                            .child(div().text_lg().font_weight(FontWeight::SEMIBOLD).child(t!("Sütunları seç")))
+                            .child(crate::theme::heading(div()).child(t!("Sütunları seç")))
                             .child(
                                 div()
                                     .h(px(34.))

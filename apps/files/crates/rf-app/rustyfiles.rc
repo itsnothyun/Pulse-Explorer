@@ -1,5 +1,6 @@
-// App icon: id 1 is what GPUI loads for its windows (platform.rs load_icon).
-1 ICON "assets/rustyfiles.ico"
+// App icon: id 1 is what GPUI loads for its windows (platform.rs load_icon). Pulse Explorer's build wears Pulse's icon
+// (a copy of apps/desktop/src-tauri/icons/icon.ico).
+1 ICON "assets/pulse-explorer.ico"
 
 // The name Windows shows (Open with, Default apps, Task Manager).
 1 VERSIONINFO
@@ -12,8 +13,8 @@ BEGIN
   BEGIN
     BLOCK "041F04B0"
     BEGIN
-      VALUE "FileDescription", "rustyfiles"
-      VALUE "ProductName", "rustyfiles"
+      VALUE "FileDescription", "Pulse Explorer"
+      VALUE "ProductName", "Pulse Explorer"
       VALUE "FileVersion", "0.1.0"
       VALUE "ProductVersion", "0.1.0"
       VALUE "OriginalFilename", "rustyfiles.exe"

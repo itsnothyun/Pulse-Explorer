@@ -337,7 +337,11 @@ fn make_cb(g: &Geometry, look: &Look, src: (u32, u32), region: &Region, check: b
         // (half sizes never quite zero: an empty shape then covers no pixel, instead of a division in the corner maths)
         shape: [(gw / (2.0 * s)).max(1e-3), (gh / (2.0 * s)).max(1e-3), g.radius_px / s, s],
         a: [look.depth, look.bezel, look.max_bezel, look.zoom],
-        b: [look.dispersion, look.blur, look.saturate, look.lum],
+        b: if super::MONOCHROME.load(std::sync::atomic::Ordering::Relaxed) {
+            [0.0, look.blur, 0.0, look.lum]
+        } else {
+            [look.dispersion, look.blur, look.saturate, look.lum]
+        },
         c: [look.contrast, look.rim, look.rim_width, look.shade],
         // y: the shadow's opacity at the outline (0 = none), z: its offset down and w: its reach, CSS px
         d: [look.light, sh[0], sh[1], sh[2]],

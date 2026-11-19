@@ -179,6 +179,7 @@ fn open(key: SharedString, field: Bounds<Pixels>, choices: Vec<Choice>, window: 
         crate::settings::ThemePref::System => matches!(cx.window_appearance(), WindowAppearance::Dark | WindowAppearance::VibrantDark),
     };
     let main = window.window_handle();
+    let want = size(px(w), px(h));
     let opts = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(Bounds::new(point(px(x), px(y)), size(px(w), px(h))))),
         display_id: crate::theme::popup_display(window, cx),
@@ -201,7 +202,7 @@ fn open(key: SharedString, field: Bounds<Pixels>, choices: Vec<Choice>, window: 
                 crate::glass::keep_out_of_capture(h.hwnd.get());
             }
         }
-        cx.new(|cx| SelectView::new(key, choices, search, main, liquid.then_some(dark), w, cx))
+        cx.new(|cx| SelectView { want: Some(want), ..SelectView::new(key, choices, search, main, liquid.then_some(dark), w, cx) })
     });
     match opened {
         Ok(h) => {
@@ -238,6 +239,8 @@ struct SelectView {
     /// The liquid look: the list sits on real glass (`glass`), its rows are 34 high and one capsule (`glide`) is the highlight.
     liquid: bool,
     glass: Option<PopupGlass>,
+    /// The size the list was opened at (see `theme::hold_popup_size`).
+    want: Option<Size<Pixels>>,
     glide: Glide,
     _watch: Option<Task<()>>,
     _subs: Vec<Subscription>,
@@ -296,6 +299,7 @@ impl SelectView {
             done: false,
             liquid: is_liquid,
             glass,
+            want: None,
             glide,
             _watch: watch,
             _subs: subs,
@@ -372,6 +376,9 @@ impl SelectView {
 impl Render for SelectView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = Palette::for_window(window);
+        if let Some(want) = self.want {
+            crate::theme::hold_popup_size(window, want);
+        }
         let liquid = self.liquid;
         let m = liquid::metrics(liquid);
         let mut list = v_flex().id("select-list").relative().flex_1().min_h_0().overflow_y_scroll().track_scroll(&self.scroll);

@@ -45,6 +45,7 @@ mod picker;
 mod nav_touch;
 mod ui_stall;
 mod places;
+mod pulse_library;
 mod settings;
 mod settings_merge;
 mod shellless;
@@ -75,6 +76,7 @@ mod recycle_view;
 mod rtl;
 mod theme;
 mod thumb_cache;
+mod web_view;
 mod workspace;
 
 use std::path::PathBuf;
@@ -742,6 +744,8 @@ pub fn main() {
         }
         settings::apply_component_theme(cx);
         cx.set_global(tags::load());
+        cx.set_global(pulse_library::load_favorites());
+        pulse_library::start_scan(cx);
         let ops = cx.new(status_center::Ops::new);
         // the Status Center flyout is its own Acrylic window, opened/closed with `open`
         cx.observe(&ops, |ops, cx| {

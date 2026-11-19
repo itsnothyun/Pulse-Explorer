@@ -9,11 +9,38 @@ use rf_core::openrules::{self, OpenRule};
 
 static RULES: RwLock<Option<Arc<Vec<OpenRule>>>> = RwLock::new(None);
 
-/// The user's lists, as the settings have them now.
-pub fn set(rules: Vec<OpenRule>) {
+/// The user's lists, as the settings have them now, followed by Pulse Explorer's viewer (see [`pulse_rule`]): a list the user made
+/// for a type comes first and wins.
+pub fn set(mut rules: Vec<OpenRule>) {
+    rules.extend(pulse_rule());
     if let Ok(mut r) = RULES.write() {
         *r = Some(Arc::new(rules));
     }
+}
+
+/// The types Pulse Explorer's viewer opens on a double click: those it registers as a viewer for (apps/desktop/src-tauri/
+/// tauri.conf.json `fileAssociations`). Archives are left out: rustyfiles opens them like folders.
+pub const PULSE_EXTS: &[&str] = &[
+    "pdf", "docx", "doc", "odt", "rtf", "pptx", "ppt", "odp", "xlsx", "xls", "ods", "csv", "tsv", "epub", "fb2", "png", "jpg",
+    "jpeg", "webp", "gif", "bmp", "ico", "svg", "md", "json", "yaml", "yml", "toml", "xml", "log", "ini", "txt", "mp4", "webm", "mp3",
+    "wav", "flac", "ogg", "aac",
+];
+
+/// Pulse Explorer's viewer: `PULSE_VIEWER`, which Pulse Explorer sets when it starts the file manager, else PulseExplorer.exe one
+/// folder up (the installed layout: `<app>/PulseExplorer.exe` and `<app>/files/rustyfiles.exe`). Read once.
+pub fn pulse_viewer() -> Option<&'static Path> {
+    static V: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
+    V.get_or_init(|| {
+        let from_env = std::env::var_os("PULSE_VIEWER").map(std::path::PathBuf::from);
+        let installed = std::env::current_exe().ok().and_then(|me| Some(me.parent()?.parent()?.join("PulseExplorer.exe")));
+        from_env.into_iter().chain(installed).find(|p| p.is_file())
+    })
+    .as_deref()
+}
+
+fn pulse_rule() -> Option<OpenRule> {
+    let viewer = pulse_viewer()?;
+    Some(OpenRule { exts: PULSE_EXTS.iter().map(|e| e.to_string()).collect(), programs: vec![viewer.display().to_string()], double_click: true })
 }
 
 /// The lists the process follows.

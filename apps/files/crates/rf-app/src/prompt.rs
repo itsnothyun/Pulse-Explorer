@@ -348,7 +348,7 @@ impl Render for DialogView {
                         v_flex()
                             .p_6()
                             .gap_3()
-                            .child(div().text_lg().font_weight(FontWeight::SEMIBOLD).child(self.title.clone()))
+                            .child(crate::theme::heading(div()).child(self.title.clone()))
                             .children(self.message.clone().map(|m| div().text_sm().text_color(p.text_secondary).child(m)))
                             .children(self.input.as_ref().map(|i| {
                                 div()

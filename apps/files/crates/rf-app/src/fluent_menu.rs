@@ -458,7 +458,7 @@ fn open_level(
                 crate::glass::keep_out_of_capture(h.hwnd.get());
             }
         }
-        cx.new(|cx| LevelView::new(view, level, liquid.then_some(dark), w, cx))
+        cx.new(|cx| LevelView { want: bounds.size, ..LevelView::new(view, level, liquid.then_some(dark), w, cx) })
     });
     match r {
         Ok(h) => Some(h.into()),
@@ -476,6 +476,8 @@ struct LevelView {
     focus: FocusHandle,
     /// The glass behind this level's window, in the liquid look.
     glass: Option<PopupGlass>,
+    /// The size the level was opened at (see `theme::hold_popup_size`).
+    want: Size<Pixels>,
     _watch: Option<Task<()>>,
     _subs: Vec<Subscription>,
 }
@@ -507,15 +509,16 @@ impl LevelView {
         }
         let glass = liquid.map(|dark| PopupGlass::start(crate::look::window::hwnd_of(window), dark));
         let watch = glass.is_some().then(|| glass_watch::watch(cx, |this: &mut Self| this.glass.as_mut()));
-        Self { menu, level, focus, glass, _watch: watch, _subs: subs }
+        Self { menu, level, focus, glass, want: window.viewport_size(), _watch: watch, _subs: subs }
     }
 }
 
 impl Render for LevelView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = Palette::for_window(window);
+        theme::hold_popup_size(window, self.want);
         let level = self.level;
-        let vh = f32::from(window.viewport_size().height);
+        let vh = f32::from(self.want.height);
         let panel = self.menu.update(cx, |m, cx| {
             let levels = m.levels();
             levels.get(level).cloned().map(|items| m.render_level(level, &items, &p, Some(vh), cx))
@@ -526,6 +529,20 @@ impl Render for LevelView {
         }
         // over glass a wash, or the plain fill until the glass runs (never a see-through panel with nothing behind it)
         let fill = self.glass.as_ref().map(|g| glass_watch::panel_fill(p.dark, g.fallback())).or_else(|| theme::popup_fill(&p));
+        // the rows settle in: a short fade with a few pixels of drop (a submenu slides in from its side), once per window
+        let panel = panel.map(|el| {
+            let el = div().relative().size_full().child(el);
+            if !crate::settings::animations() {
+                return el.into_any_element();
+            }
+            let dx = if level == 0 { 0. } else { -6. };
+            let dy = if level == 0 { -6. } else { 0. };
+            el.with_animation("menu-level-in", Animation::new(Duration::from_millis(180)).with_easing(ease_out_quint()), move |el, t| {
+                let k = 1. - t;
+                el.opacity(t).left(px(dx * k)).top(px(dy * k))
+            })
+            .into_any_element()
+        });
         div()
             .size_full()
             .when_some(fill, |d, f| d.bg(f))

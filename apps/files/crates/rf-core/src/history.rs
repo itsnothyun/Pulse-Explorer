@@ -19,6 +19,12 @@ pub enum Location {
     Shell { parsing: String, name: String },
     /// Where the space goes under a folder or drive (the disk usage view).
     DiskUsage(PathBuf),
+    /// One of Pulse Explorer's library views, listed from the user's folders: `key` is "library" (every file),
+    /// "recent", "favorites" or a file type ("pdf", "documents", "slides"…; see rf-app `pulse_library`). `name`
+    /// is the title shown.
+    Pulse { key: String, name: String },
+    /// A web page in a browser tab (Pulse Explorer's browser, rf-app `web_view`): `url` is where the tab is.
+    Web { url: String },
 }
 
 impl Location {
@@ -95,7 +101,7 @@ impl Location {
             },
             Location::Search { root, .. } => Some(Location::Path(root.clone())),
             Location::DiskUsage(p) => Some(Location::Path(p.clone())),
-            Location::RecycleBin | Location::Settings | Location::Tag(_) | Location::Library { .. } => {
+            Location::RecycleBin | Location::Settings | Location::Tag(_) | Location::Library { .. } | Location::Pulse { .. } | Location::Web { .. } => {
                 Some(Location::Home)
             }
             Location::Shell { parsing, .. } => Some(shell_parent(parsing)),
@@ -111,12 +117,23 @@ impl Location {
             Location::Tag(_) => "Etiket".into(),
             Location::Search { query, .. } => format!("Arama: {query}"),
             Location::Library { name, .. } => name.clone(),
+            Location::Pulse { name, .. } => name.clone(),
+            Location::Web { url } => web_title(url),
             Location::Shell { parsing, name } if name.is_empty() => shell_last_segment(parsing).to_string(),
             Location::Shell { name, .. } => name.clone(),
             Location::DiskUsage(p) => format!("Disk kullanımı — {}", display_name(p)),
             Location::Path(p) => display_name(p),
         }
     }
+}
+
+/// A page's name before it has a title: its host (`https://docs.rs/x` → `docs.rs`), a local file's name.
+pub fn web_title(url: &str) -> String {
+    let rest = url.split_once("://").map_or(url, |(_, r)| r);
+    if url.to_ascii_lowercase().starts_with("file:") {
+        return rest.rsplit('/').next().unwrap_or(rest).replace("%20", " ");
+    }
+    rest.split('/').next().unwrap_or(rest).trim_start_matches("www.").to_string()
 }
 
 /// Last part of a shell parsing name (`::{GUID}\Foo` → `Foo`).
@@ -251,6 +268,10 @@ impl History {
             self.back.remove(0);
         }
         self.forward.clear();
+    }
+    /// Puts `to` in the current entry's place, without a step back (a page that redirected where it was sent).
+    pub fn replace(&mut self, to: Location) {
+        self.current = to.cleaned();
     }
     pub fn can_back(&self) -> bool {
         !self.back.is_empty()

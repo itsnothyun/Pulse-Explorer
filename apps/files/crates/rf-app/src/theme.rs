@@ -1,5 +1,6 @@
-//! rustyfiles palette: Windows 11 Fluent surfaces + SwiftUI-like softness
-//! (rounded corners, gentle fills, calm secondary text).
+//! rustyfiles palette, in Pulse Explorer's colours: Pulse's warm grey line from #090909 to #f2f2ed
+//! (apps/web/src/styles/index.css). Strictly achromatic: the accent is Phosphor White on dark and
+//! Ground on light, and state reads as brightness.
 
 use gpui_kit::*;
 
@@ -49,14 +50,22 @@ fn hexa(c: u32, a: f32) -> Hsla {
     h
 }
 
-/// The accent palette the app wears: the colour the user chose for rustyfiles (Settings > Appearance), else the user's Windows
-/// accent palette, which is read once.
+/// Pulse's grey line (apps/web/src/styles/index.css).
+pub const PULSE_GROUND: u32 = 0x090909;
+pub const PULSE_RAISED: u32 = 0x0E0E0E;
+pub const PULSE_WELL: u32 = 0x0F0F0E;
+pub const PULSE_MENU: u32 = 0x181817;
+pub const PULSE_EDGE: u32 = 0x2A2A28;
+pub const PULSE_RULE: u32 = 0x303030;
+pub const PULSE_DIM: u32 = 0x757573;
+pub const PULSE_MID: u32 = 0xB3B3AD;
+pub const PULSE_ON: u32 = 0xF2F2ED;
+pub const PULSE_PAPER: u32 = 0xE6E6E0;
+
+/// The accent palette the app wears: the colour the user chose for rustyfiles (Settings > Appearance), else none and the palette
+/// keeps Pulse's achromatic accent (Windows' accent colour is not used: Pulse has no hue).
 fn system_accent() -> Option<rf_win::accent::AccentPalette> {
-    static WINDOWS: std::sync::OnceLock<Option<rf_win::accent::AccentPalette>> = std::sync::OnceLock::new();
-    match rf_win::accent::override_color() {
-        Some(c) => Some(rf_win::accent::from_color(c)),
-        None => *WINDOWS.get_or_init(rf_win::accent::system_palette),
-    }
+    rf_win::accent::override_color().map(rf_win::accent::from_color)
 }
 
 impl Palette {
@@ -64,30 +73,31 @@ impl Palette {
     // selection is a quiet neutral fill plus an accent pill (see `selection_pill`), and the
     // accent is the user's own Windows accent color.
     pub fn light() -> Self {
-        let accent = system_accent().map(|a| a.dark1()).unwrap_or(0x005FB8);
+        let accent = system_accent().map(|a| a.dark1()).unwrap_or(PULSE_GROUND);
         Self {
             dark: false,
-            window_bg: hexa(0xF3F3F3, 0.30),
-            titlebar_bg: hexa(0xEBEBEB, 0.0),
-            sidebar_bg: hexa(0xFFFFFF, 0.0),
-            content_bg: hexa(0xFFFFFF, 0.50),
-            card_bg: hex(0xF9F9F9),
-            bar_bg: hexa(0xF9F9F9, 0.0),
-            tile_bg: hexa(0xFFFFFF, 0.70),
-            tile_hover: hexa(0xF9F9F9, 0.50),
-            border: hexa(0x000000, 0.07),
-            divider: hexa(0x000000, 0.07),
-            text: hexa(0x000000, 0.90),
-            text_secondary: hexa(0x000000, 0.62),
-            text_tertiary: hexa(0x000000, 0.45),
+            window_bg: hexa(PULSE_PAPER, 0.55),
+            titlebar_bg: hexa(PULSE_PAPER, 0.0),
+            sidebar_bg: hexa(PULSE_ON, 0.0),
+            content_bg: hexa(PULSE_ON, 0.60),
+            card_bg: hex(PULSE_ON),
+            bar_bg: hexa(PULSE_ON, 0.0),
+            tile_bg: hexa(PULSE_ON, 0.75),
+            tile_hover: hexa(PULSE_ON, 0.55),
+            border: hexa(PULSE_GROUND, 0.10),
+            divider: hexa(PULSE_GROUND, 0.08),
+            text: hex(PULSE_GROUND),
+            text_secondary: hexa(PULSE_GROUND, 0.64),
+            text_tertiary: hexa(PULSE_GROUND, 0.46),
             accent: hex(accent),
-            accent_text: hex(0xFFFFFF),
-            hover: hexa(0x000000, 0.04),
-            pressed: hexa(0x000000, 0.07),
-            selection: hexa(0x000000, 0.06),
+            accent_text: hex(PULSE_ON),
+            hover: hexa(PULSE_GROUND, 0.05),
+            pressed: hexa(PULSE_GROUND, 0.09),
+            selection: hexa(PULSE_GROUND, 0.08),
             selection_border: hexa(accent, 0.55),
-            tab_active: hexa(0xFFFFFF, 0.70),
-            danger: hex(0xC42B1C),
+            tab_active: hexa(PULSE_ON, 0.80),
+            // (Pulse's lit-or-not rule: danger is full-strength ink, not a hue)
+            danger: hex(PULSE_GROUND),
             liquid: false,
         }
     }
@@ -100,53 +110,51 @@ impl Palette {
             titlebar_bg: hexa(0x000000, 0.0),
             sidebar_bg: hexa(0x000000, 0.0),
             content_bg: hex(0x000000),
-            card_bg: hex(0x0A0A0A),
+            card_bg: hex(PULSE_GROUND),
             bar_bg: hexa(0x000000, 0.0),
-            tile_bg: hexa(0xFFFFFF, 0.04),
-            tile_hover: hexa(0xFFFFFF, 0.08),
-            border: hexa(0xFFFFFF, 0.14),
-            divider: hexa(0xFFFFFF, 0.12),
-            text: hex(0xFFFFFF),
-            text_secondary: hexa(0xFFFFFF, 0.72),
-            text_tertiary: hexa(0xFFFFFF, 0.50),
-            hover: hexa(0xFFFFFF, 0.08),
-            pressed: hexa(0xFFFFFF, 0.12),
-            selection: hexa(0xFFFFFF, 0.11),
-            tab_active: hexa(0xFFFFFF, 0.08),
+            tile_bg: hexa(PULSE_ON, 0.04),
+            tile_hover: hexa(PULSE_ON, 0.08),
+            border: hexa(PULSE_ON, 0.14),
+            divider: hexa(PULSE_ON, 0.12),
+            text: hex(PULSE_ON),
+            text_secondary: hexa(PULSE_ON, 0.72),
+            text_tertiary: hexa(PULSE_ON, 0.50),
+            hover: hexa(PULSE_ON, 0.08),
+            pressed: hexa(PULSE_ON, 0.12),
+            selection: hexa(PULSE_ON, 0.11),
+            tab_active: hexa(PULSE_ON, 0.08),
             ..Self::dark()
         }
     }
 
     pub fn dark() -> Self {
-        let accent = system_accent().map(|a| a.light2()).unwrap_or(0x60CDFF);
+        let accent = system_accent().map(|a| a.light2()).unwrap_or(PULSE_ON);
         Self {
             dark: true,
-            // a neutral wash over Mica: keeps its depth but tames a strongly colored wallpaper
-            // (a red desktop made the whole window look red)
-            window_bg: hexa(0x202020, 0.40),
-            titlebar_bg: hexa(0x1C1C1C, 0.0),
-            sidebar_bg: hexa(0x000000, 0.0),
-            // darker than Fluent's LayerFill (#3A3A3A 30%), close to Explorer's content pane
-            // (~#1B1B1B over Mica): calmer, less desktop tint behind the files
-            content_bg: hexa(0x141414, 0.45),
-            card_bg: hex(0x2C2C2C),
-            bar_bg: hexa(0x2C2C2C, 0.0),
-            tile_bg: hexa(0xFFFFFF, 0.0512),
-            tile_hover: hexa(0xFFFFFF, 0.0837),
-            border: hexa(0xFFFFFF, 0.08),
-            divider: hexa(0xFFFFFF, 0.07),
-            text: hexa(0xFFFFFF, 0.94),
-            text_secondary: hexa(0xFFFFFF, 0.70),
-            text_tertiary: hexa(0xFFFFFF, 0.46),
+            // Pulse's ground as a heavy wash: over Mica the desktop barely tints it, and the Solid material paints it opaque
+            window_bg: hexa(PULSE_GROUND, 0.82),
+            titlebar_bg: hexa(PULSE_GROUND, 0.0),
+            sidebar_bg: hexa(PULSE_GROUND, 0.0),
+            content_bg: hexa(PULSE_RAISED, 0.70),
+            card_bg: hex(PULSE_MENU),
+            bar_bg: hexa(PULSE_MENU, 0.0),
+            tile_bg: hexa(PULSE_WELL, 0.90),
+            tile_hover: hexa(PULSE_EDGE, 0.60),
+            border: hex(PULSE_EDGE),
+            divider: hex(PULSE_RULE),
+            text: hex(PULSE_ON),
+            text_secondary: hex(PULSE_MID),
+            text_tertiary: hex(PULSE_DIM),
             accent: hex(accent),
-            // Fluent: text on a light accent fill is dark
-            accent_text: hexa(0x000000, 0.90),
-            hover: hexa(0xFFFFFF, 0.06),
-            pressed: hexa(0xFFFFFF, 0.10),
-            selection: hexa(0xFFFFFF, 0.085),
+            // text on Phosphor White is Ground
+            accent_text: hex(PULSE_GROUND),
+            hover: hexa(PULSE_ON, 0.05),
+            pressed: hexa(PULSE_ON, 0.09),
+            selection: hexa(PULSE_ON, 0.08),
             selection_border: hexa(accent, 0.55),
-            tab_active: hexa(0xFFFFFF, 0.06),
-            danger: hex(0xFF99A4),
+            tab_active: hexa(PULSE_ON, 0.06),
+            // (Pulse's lit-or-not rule: danger is full brightness, not a hue)
+            danger: hex(PULSE_ON),
             liquid: false,
         }
     }
@@ -163,7 +171,7 @@ impl Palette {
         };
         if crate::settings::solid_backdrop() {
             // "Solid" material: Windows 11's plain window color instead of Mica
-            p.window_bg = if p.dark { hex(0x202020) } else { hex(0xF3F3F3) };
+            p.window_bg = if p.dark { hex(PULSE_GROUND) } else { hex(PULSE_PAPER) };
         }
         if crate::settings::theme_override() == crate::settings::ThemePref::Black {
             // (opaque black whatever the material: no glass, no washes)
@@ -176,7 +184,10 @@ impl Palette {
             // Over the glass the two washes are the veil: Mica is already a quiet, nearly opaque tone, the glass is the live screen.
             // At the strength made for Mica they hid two thirds of it in the dark theme (the user: too black), so the default is half
             // of that; the HyperGlass "surface wash" setting moves it either way.
-            (p.window_bg.a, p.content_bg.a) = glass_washes(p.dark, crate::settings::hg_surface());
+            let (w, c) = glass_washes(p.dark, crate::settings::hg_surface());
+            // Pulse Explorer's build: the glass is a subtle frost under a heavy wash of Pulse's ground, never the bare screen
+            let (fw, fc) = if p.dark { (0.62, 0.55) } else { (0.55, 0.50) };
+            (p.window_bg.a, p.content_bg.a) = (w.max(fw), c.max(fc));
             p.bar_bg = Hsla { a: glass_bar_wash(crate::settings::hg_surface()), ..p.card_bg };
         }
         p
@@ -189,7 +200,7 @@ impl Palette {
     /// penceresinde ... arkaplanı da mat"): it opens over another program's window, and a see-through material showed that program
     /// and the desktop through the file list.
     pub fn matte(mut self) -> Self {
-        self.window_bg = if self.dark { hex(0x202020) } else { hex(0xF3F3F3) };
+        self.window_bg = if self.dark { hex(PULSE_GROUND) } else { hex(PULSE_PAPER) };
         self
     }
 }
@@ -223,7 +234,7 @@ pub fn popup_material(liquid: bool) -> WindowBackgroundAppearance {
 /// What a popup paints behind its content on a Windows that gives it no Acrylic: the plain colour Windows 11 itself uses for a
 /// flyout without transparency. `None` where the Acrylic is the surface and the popup paints nothing.
 pub fn popup_fill(p: &Palette) -> Option<Hsla> {
-    (!crate::settings::materials_available()).then(|| if p.dark { hex(0x2C2C2C) } else { hex(0xF9F9F9) })
+    (!crate::settings::materials_available()).then(|| if p.dark { hex(PULSE_MENU) } else { hex(PULSE_ON) })
 }
 
 /// The alpha of `window_bg` and `content_bg` over a window that shows glass, for the surface value (0..=100) of the HyperGlass
@@ -249,34 +260,58 @@ pub fn glass_bar_wash(surface: u8) -> f32 {
     0.40 + 0.30 * f32::from(surface.min(100)) / 100.0
 }
 
-/// Icon tint per file category (SwiftUI-style colored symbols).
+/// Icon tint per file category: steps on Pulse's grey line, brightest for folders (no hues, as in Pulse).
 pub fn kind_color(cat: crate::icons::Category, dark: bool) -> Hsla {
     use crate::icons::Category::*;
-    let c = match cat {
-        Folder => 0xF2B33D,
-        Image => 0xAF52DE,
-        Video => 0xFF375F,
-        Audio => 0xFF9F0A,
-        Archive => 0xA2845E,
-        Code => 0x30B0C7,
-        Document => 0x0A84FF,
-        Spreadsheet => 0x30D158,
-        Pdf => 0xFF453A,
-        Executable => 0x8E8E93,
-        Text => 0x8E8E93,
-        Other => 0x8E8E93,
+    let (on_dark, on_light) = match cat {
+        Folder => (0xF2F2ED, 0x181817),
+        Image | Video | Audio => (0xD6D6D0, 0x3A3A37),
+        Document | Spreadsheet | Pdf | Code => (0xB3B3AD, 0x4A4A47),
+        Archive | Executable | Text | Other => (0x8C8C88, 0x757573),
     };
-    let mut h = hex(c);
-    if !dark && matches!(cat, Folder) {
-        h.l *= 0.92;
-    }
-    h
+    hex(if dark { on_dark } else { on_light })
 }
 
 /// The selection marker shared by every list (sidebar, details, columns, menus): a short
 /// rounded accent bar on the left edge of a selected row. The row must be `relative()`.
 pub fn selection_pill(p: &Palette) -> Div {
     div().absolute().left(px(0.)).top(px(8.)).bottom(px(8.)).w(px(3.)).rounded_full().bg(p.accent)
+}
+
+/// Pulse's 5x7 dot font (assets/fonts/PulsePixel.ttf, made by tools/pulse-pixel/build_font.py) for headings, as the PixelText
+/// headings of Pulse Explorer's web app. Letters it has no dot for fall back to the system font.
+pub const HEADING_FONT: &str = "Pulse Pixel";
+
+/// Makes [`HEADING_FONT`] known to this process's text system. Once per process.
+pub fn register_fonts(cx: &mut App) {
+    static DONE: std::sync::Once = std::sync::Once::new();
+    DONE.call_once(|| {
+        let ttf: &'static [u8] = include_bytes!("../assets/fonts/PulsePixel.ttf");
+        if let Err(e) = cx.text_system().add_fonts(vec![std::borrow::Cow::Borrowed(ttf)]) {
+            log::warn!("Pulse Pixel font: {e}");
+        }
+    });
+}
+
+/// A title (a page, a dialog) in [`HEADING_FONT`]: 20 px, so a dot is 2 whole pixels, and no synthetic bold.
+pub fn heading(el: Div) -> Div {
+    el.font_family(HEADING_FONT).font_weight(FontWeight::NORMAL).text_size(px(20.))
+}
+
+/// A section heading in [`HEADING_FONT`]: 15 px (1.5 px dots), next to body text.
+pub fn subheading(el: Div) -> Div {
+    el.font_family(HEADING_FONT).font_weight(FontWeight::NORMAL).text_size(px(15.))
+}
+
+/// Puts a popup back to the size it was opened at. On a monitor whose scaling differs from the one the app started on, Windows
+/// scales a new popup a second time as it moves there (seen at 150 %: a menu 2.25 times its size, the rows at 1.5 times and the
+/// rest an empty panel). Called from the popup's render: a size that is right does nothing.
+pub fn hold_popup_size(window: &mut Window, want: Size<Pixels>) {
+    let vp = window.viewport_size();
+    let off = |a: Pixels, b: Pixels| (f32::from(a) - f32::from(b)).abs() > 1.;
+    if off(vp.width, want.width) || off(vp.height, want.height) {
+        window.on_next_frame(move |w, _| w.resize(want));
+    }
 }
 
 pub const RADIUS: Pixels = px(8.);

@@ -690,6 +690,15 @@ pub fn look() -> LookParams {
     *look_guard()
 }
 
+/// Pulse Explorer's build draws the glass without colour: no hue from what is behind it and no rainbow at the rim. Off by default (the
+/// engine's own look, which its tests check); the app turns it on at start.
+pub(crate) static MONOCHROME: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Turns [`MONOCHROME`] on or off for the whole process.
+pub fn set_monochrome(on: bool) {
+    MONOCHROME.store(on, Ordering::Relaxed);
+}
+
 /// The setting "freeze the glass while the window is not in front" (off by default, for the whole process). It only touches windows
 /// the app marked with [`set_freezable`]: a dock island, a menu or a panel is never "in front" and must not freeze. A window whose
 /// glass is frozen is not prepared, drawn or read back and does not keep a capture alive; its last picture stays on the screen. It

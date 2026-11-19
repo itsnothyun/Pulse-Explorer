@@ -1278,6 +1278,29 @@ impl Workspace {
     }
 
     /// A new tab asked for by the user (Ctrl+T, "+", the tab menu): Home, or the folder of the tab in front when the setting says so.
+    /// Pulse Explorer's browser: a new tab on a blank page with the address field ready for a URL (`web_view`).
+    fn open_browser_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_tab(Location::Web { url: "about:blank".into() }, window, cx);
+        self.begin_address_edit(window, cx);
+    }
+
+    /// The "+" button's right click: a folder tab or a browser tab.
+    fn new_tab_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use crate::fluent_menu::{Item, Menu, MenuIcon};
+        let me = cx.entity().downgrade();
+        let me2 = me.clone();
+        let items = vec![
+            Item::action(t!("Yeni sekme"), MenuIcon::Lucide(L::Plus), move |w: &mut Window, cx: &mut App| {
+                let _ = me.update(cx, |ws, cx| ws.open_new_tab(w, cx));
+            })
+            .hint("Ctrl+T"),
+            Item::action(crate::i18n::tx("Yeni tarayıcı sekmesi", "New browser tab"), MenuIcon::Lucide(L::Globe), move |w: &mut Window, cx: &mut App| {
+                let _ = me2.update(cx, |ws, cx| ws.open_browser_tab(w, cx));
+            }),
+        ];
+        crate::fluent_menu::show(Menu { quick: Vec::new(), items }, window.mouse_position(), window, cx);
+    }
+
     fn open_new_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let here = (cx.global::<crate::settings::Settings>().new_tab_opens == crate::settings::NewTabOpens::Current)
             .then(|| self.tabs.get(self.active).map(|t| t.view().read(cx).location().clone()))
@@ -1366,6 +1389,7 @@ impl Workspace {
         let n = self.tabs.len();
         let items = vec![
             Item::action(t!("Yeni sekme"), MenuIcon::Lucide(L::Plus), act(|ws, _, w, cx| ws.open_new_tab(w, cx))).hint("Ctrl+T"),
+            Item::action(crate::i18n::tx("Yeni tarayıcı sekmesi", "New browser tab"), MenuIcon::Lucide(L::Globe), act(|ws, _, w, cx| ws.open_browser_tab(w, cx))),
             Item::action(t!("Sekmeyi çoğalt"), MenuIcon::Lucide(L::Copy), act(|ws, ix, w, cx| {
                 if let Some(loc) = ws.tabs.get(ix).map(|t| t.view().read(cx).location().clone()) {
                     ws.open_tab(loc, w, cx);
@@ -2039,6 +2063,7 @@ impl Workspace {
         let text = match self.active_tab().read(cx).location() {
             Location::Path(p) => p.to_string_lossy().into_owned(),
             Location::Search { root, .. } => root.to_string_lossy().into_owned(),
+            Location::Web { url } if url != "about:blank" => url.clone(),
             _ => String::new(),
         };
         self.editing_address = true;
@@ -2230,7 +2255,12 @@ impl Workspace {
                 // the title bar arms a window move on mouse down: the slightest jitter then
                 // swallows the mouse up and the click never happens
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .on_click(cx.listener(|this, _, window, cx| this.open_new_tab(window, cx)));
+                .on_click(cx.listener(|this, _, window, cx| this.open_new_tab(window, cx)))
+                // right click: a folder tab or a browser tab
+                .on_mouse_down(MouseButton::Right, cx.listener(|this, _, window, cx| {
+                    cx.stop_propagation();
+                    this.new_tab_menu(window, cx);
+                }));
         // after the new tab has grown, the next "+" slides out from behind it
         let new_tab: AnyElement = match self.tab_anim.as_ref().map(|(_, s)| *s) {
             Some(serial) => {
@@ -2995,6 +3025,8 @@ impl Workspace {
             // the shell's own name for the folder (the location may carry none)
             Location::Shell { .. } => vec![(self.active_tab().read(cx).title(cx), loc.clone())],
             Location::DiskUsage(path) => vec![(crate::disk_usage::title(path), loc.clone())],
+            // a page shows its address
+            Location::Web { url } => vec![(if url == "about:blank" { String::new() } else { url.clone() }, loc.clone())],
             other => vec![(crate::i18n::td(&other.title()), other.clone())],
         };
         // Too long for the address box: hide leading segments after the drive behind "…"
@@ -3100,6 +3132,24 @@ impl Workspace {
         p: &Palette,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
+        self.sidebar_row(id, icon, icon_color, label, target, active, extra, None, p, cx)
+    }
+
+    /// [`Self::sidebar_item`] with a count at the trailing edge (Pulse Explorer's library rows: "PDF 12").
+    #[allow(clippy::too_many_arguments)]
+    fn sidebar_row(
+        &self,
+        id: ElementId,
+        icon: L,
+        icon_color: Hsla,
+        label: String,
+        target: Location,
+        active: bool,
+        extra: Option<AnyElement>,
+        count: Option<usize>,
+        p: &Palette,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
         let target2 = target.clone();
         let target3 = target.clone();
         let drop_dir = target.path().map(Path::to_path_buf);
@@ -3173,6 +3223,7 @@ impl Workspace {
                         .child(div().whitespace_nowrap().overflow_hidden().text_ellipsis().child(label))
                         .children(extra),
                 )
+                .children(count.map(|n| div().flex_shrink_0().pr_1().text_xs().text_color(p.text_tertiary).child(n.to_string())))
             })
 
             .on_click(cx.listener(move |this, _, window, cx| this.navigate(target.clone(), window, cx)))
@@ -3212,14 +3263,7 @@ impl Workspace {
             if rail {
                 return div().mx_2().my_2().h(px(1.)).bg(p.divider);
             }
-            div()
-                .px_2()
-                .pt_3()
-                .pb_1()
-                .text_xs()
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(p.text_tertiary)
-                .child(t)
+            crate::theme::subheading(div().px_2().pt_3().pb_1()).text_color(p.text_tertiary).child(t)
         };
         // the "drop here to pin" row lives as long as a file drag does
         if !cx.has_active_drag() {
@@ -3253,6 +3297,32 @@ impl Workspace {
             p,
             cx,
         ));
+        // Pulse Explorer's library (pulse_library): every file, recent ones and the starred ones
+        {
+            let lib = cx.default_global::<crate::pulse_library::Library>();
+            let (all, scanned) = (lib.count(None), lib.scanned);
+            let favorites = cx.try_global::<crate::pulse_library::Favorites>().map_or(0, |f| f.0.len());
+            for (key, label, count) in [
+                ("library", crate::i18n::tx("Kitaplık", "Library"), scanned.then_some(all)),
+                ("recent", crate::i18n::tx("Son kullanılanlar", "Recent"), None),
+                ("favorites", crate::i18n::tx("Sık kullanılanlar", "Favorites"), Some(favorites)),
+            ] {
+                let loc = crate::pulse_library::location(key);
+                let active = cur == loc;
+                col = col.child(self.sidebar_row(
+                    SharedString::from(format!("sb-pulse-{key}")).into(),
+                    crate::pulse_library::icon(key),
+                    p.text_secondary,
+                    label.to_string(),
+                    loc,
+                    active,
+                    None,
+                    count,
+                    p,
+                    cx,
+                ));
+            }
+        }
         // dropping folders on the header pins them
         col = col.child(
             div()
@@ -3384,9 +3454,35 @@ impl Workspace {
         // The tags are known at once, the pins and drives above them a moment later: drawn before those, the coloured tag rows stood
         // at the top of the sidebar for the first 90 ms of a cold start and then jumped down (seen frame by frame: a user's report of
         // a red and blue flash when a folder is opened with the app closed). They wait for the places.
+        // Pulse Explorer's TYPES: one row per type the library has, with its count (as the web sidebar showed only the ones present)
+        if shown("types") {
+            let lib = cx.default_global::<crate::pulse_library::Library>();
+            let counts: Vec<(usize, usize)> = (0..crate::pulse_library::TYPES.len()).map(|i| (i, lib.count(Some(i)))).filter(|(_, n)| *n > 0).collect();
+            if !counts.is_empty() {
+                col = col.child(header("Types"));
+            }
+            for (i, n) in counts {
+                let t = &crate::pulse_library::TYPES[i];
+                let loc = crate::pulse_library::location(t.key);
+                let active = cur == loc;
+                col = col.child(self.sidebar_row(
+                    ("sb-type", i).into(),
+                    t.icon,
+                    p.text_secondary,
+                    t.name.to_string(),
+                    loc,
+                    active,
+                    None,
+                    Some(n),
+                    p,
+                    cx,
+                ));
+            }
+        }
         let tag_defs = if shown("tags") && places_loaded { cx.global::<crate::tags::Tags>().0.defs.clone() } else { Vec::new() };
         if !tag_defs.is_empty() {
-            col = col.child(header(t!("Etiketler")));
+            // (Pulse Explorer's collections are the file manager's tags)
+            col = col.child(header("Collections"));
         }
         for d in tag_defs {
             let loc = Location::Tag(d.id);
@@ -3941,6 +4037,19 @@ impl Render for Workspace {
         if window.focused(cx).is_none() && !self.tabs.is_empty() {
             self.focus_active(window, cx);
         }
+        // Pulse Explorer's browser tabs: pages asked for from outside a window (an .html file opened) open here when this is the
+        // window in front, and only the page of the tab on screen is shown
+        if window.is_window_active() && cx.try_global::<crate::web_view::PendingTabs>().is_some_and(|q| !q.0.is_empty()) {
+            let urls = std::mem::take(&mut cx.global_mut::<crate::web_view::PendingTabs>().0);
+            for url in urls {
+                self.open_tab(Location::Web { url }, window, cx);
+            }
+        }
+        {
+            let active = self.active_tab().read(cx);
+            let keep = matches!(active.location(), Location::Web { .. }).then(|| self.active_tab().entity_id());
+            crate::web_view::show_only(crate::look::window::hwnd_of(window), keep);
+        }
         let p = Palette::for_window(window);
         // (the Open / Save window is matte: see `Palette::matte`)
         let p = if self.picker.is_some() { p.matte() } else { p };
@@ -4238,7 +4347,7 @@ impl Render for Workspace {
                 .child(action("coffee-no", t!("Bir daha gösterme"), 2))
         });
         // Taskbar title follows the active folder.
-        let title = format!("{} — rustyfiles", self.active_tab().read(cx).title(cx));
+        let title = format!("{} — Pulse Explorer", self.active_tab().read(cx).title(cx));
         if title != self.last_title {
             window.set_window_title(&title);
             self.last_title = title;

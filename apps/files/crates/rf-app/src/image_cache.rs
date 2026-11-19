@@ -278,6 +278,11 @@ impl ImageCache {
     /// own (`folder_has_own_icon`) is asked for it, like a program or a shortcut.
     pub fn icon(&mut self, dir: &Path, e: &Entry, cx: &mut Context<Self>) -> Option<Arc<RenderImage>> {
         let unique = own_picture(e);
+        if e.is_dir() && !unique {
+            // (Pulse Explorer's build: a plain folder is our grey folder glyph, not Windows' yellow folder; a folder with an icon of
+            // its own keeps it)
+            return None;
+        }
         let key = if unique && e.is_dir() {
             // (with the folder's time and attributes: an icon chosen later changes one of them, and the old picture is not kept)
             let generation = FOLDER_ICON_GEN.load(std::sync::atomic::Ordering::Relaxed);
@@ -335,6 +340,10 @@ impl ImageCache {
     fn thumbnail_as(&mut self, dir: &Path, e: &Entry, size: u32, urgent: bool, cx: &mut Context<Self>) -> Option<Arc<RenderImage>> {
         let wants_thumb = crate::icons::has_thumbnail(e);
         let per_file = wants_thumb || own_picture(e);
+        if e.is_dir() && !per_file {
+            // (as in `icon`: a plain folder is drawn as our grey glyph)
+            return None;
+        }
         let key = if per_file && e.is_dir() && !wants_thumb {
             key_of(&[&"dirpathL", &dir, &&*e.name, &e.modified_ms, &e.attrs, &size])
         } else if per_file {

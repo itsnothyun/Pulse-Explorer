@@ -216,7 +216,14 @@ pub fn takes_betas(switch_on: bool, this_version: &str) -> bool {
     switch_on || is_beta(this_version)
 }
 
+/// No updates in Pulse Explorer's build: it ships inside Pulse Explorer's installer, and an update from upstream's GitHub Releases
+/// would replace it with stock rustyfiles (without Pulse's colours and font). Pulse Explorer's own releases update it.
+const UPDATES_FROM_GITHUB: bool = false;
+
 fn manager() -> Option<UpdateManager> {
+    if !UPDATES_FROM_GITHUB {
+        return None;
+    }
     let betas = takes_betas(BETAS.load(std::sync::atomic::Ordering::Relaxed), env!("CARGO_PKG_VERSION"));
     UpdateManager::new(GithubSource::new(REPO, None, betas), None, None).ok()
 }

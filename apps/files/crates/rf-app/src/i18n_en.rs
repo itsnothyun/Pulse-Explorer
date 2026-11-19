@@ -1561,12 +1561,12 @@ pub const EN: &[(&str, &str)] = &[
         "Gizlediğiniz sürücü kenar çubuğunda, Ana Sayfa'da ve adres çubuğunun sürücü listesinde görünmez; adresini yazarak yine açabilirsiniz. Explorer'ın gizlediği sürücüler burada da gizlidir.",
         "A drive you hide is not shown in the sidebar, on the Home page or in the address bar's list of drives; you can still open it by typing its address. Drives that Explorer hides are hidden here too.",
     ),
-    ("Windows'un rengi", "Windows' color"),
+    ("Windows'un rengi", "Pulse white"),
     ("Kendi rengim…", "My own color…"),
     ("Rengi #RRGGBB biçiminde yazın, örneğin #F7630C.", "Write the color as #RRGGBB, for example #F7630C."),
     (
         "Düğmelerin, seçimin ve vurguların rengi: Windows'unki, hazır renklerden biri ya da kendi yazdığınız renk.",
-        "The color of buttons, the selection and highlights: Windows' own, one of these, or a color you write yourself.",
+        "The color of buttons, the selection and highlights: Pulse's own white, one of these, or a color you write yourself.",
     ),
     ("Dosya türlerine göre programlar", "Programs by file type"),
     (

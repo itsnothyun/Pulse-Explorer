@@ -326,7 +326,7 @@ impl Render for BinSettingsDialog {
                         v_flex()
                             .p_6()
                             .gap_3()
-                            .child(div().text_lg().font_weight(FontWeight::SEMIBOLD).child(t!("Geri Dönüşüm Kutusu ayarları")))
+                            .child(crate::theme::heading(div()).child(t!("Geri Dönüşüm Kutusu ayarları")))
                             .child(body)
                             .children(self.error.clone().filter(|_| self.edit.is_some()).map(|e| div().text_xs().text_color(p.danger).child(e))),
                     )

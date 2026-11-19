@@ -29,7 +29,7 @@ pub fn open(view: WeakEntity<FolderView>, dual: bool, shelf: bool, pos: Point<Pi
 }
 
 fn section(p: &Palette, title: &str) -> Div {
-    div().px_4().pt_3().pb_2().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(p.text).child(title.to_string())
+    crate::theme::subheading(div().px_4().pt_3().pb_2()).text_color(p.text).child(title.to_string())
 }
 
 fn divider(p: &Palette) -> Div {

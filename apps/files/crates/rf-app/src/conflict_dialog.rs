@@ -443,7 +443,7 @@ impl Render for ConflictView {
                             .pt_6()
                             .pb_4()
                             .gap_1()
-                            .child(div().text_lg().font_weight(FontWeight::SEMIBOLD).child(title))
+                            .child(crate::theme::heading(div()).child(title))
                             .child(div().text_sm().text_color(p.text_secondary).overflow_hidden().text_ellipsis().whitespace_nowrap().child(route)),
                     )
                     .children(single)

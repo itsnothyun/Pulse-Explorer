@@ -71,7 +71,13 @@ pub(crate) fn liquid_decision(window_shows_glass: bool, popup_over_glass: bool) 
 
 /// Whether the controls of this window are drawn the liquid way (the palette asks this once per paint, so the common case, no glass
 /// anywhere, is two atomic reads).
+///
+/// Pulse Explorer's build: the liquid look everywhere Windows gives materials (glass menus and lists, the gliding highlight, the
+/// lens switches), whatever backdrop the window has. Its popups then open on real glass too.
 pub fn liquid(hwnd: isize) -> bool {
+    if hwnd != 0 && crate::settings::materials_available() {
+        return true;
+    }
     let popup = LIQUID_POPUPS_ANY.load(std::sync::atomic::Ordering::Relaxed) && LIQUID_POPUPS.lock().unwrap_or_else(|p| p.into_inner()).contains(&hwnd);
     liquid_decision(shown(hwnd), popup)
 }
@@ -713,12 +719,17 @@ mod tests {
         assert!(liquid_decision(true, false), "a window that shows glass");
         assert!(liquid_decision(false, true), "a popup opened from one");
         assert!(liquid_decision(true, true));
-        // the registry: a popup is liquid from the moment it is marked until it is unmarked, and only that window
-        assert!(!super::liquid(7001));
-        super::set_liquid_popup(7001, true);
-        assert!(super::liquid(7001) && !super::liquid(7002));
-        super::set_liquid_popup(7001, false);
-        assert!(!super::liquid(7001));
+        // Pulse Explorer's build: every window is liquid where Windows has materials
+        if crate::settings::materials_available() {
+            assert!(super::liquid(7001) && super::liquid(7002));
+        } else {
+            // the registry: a popup is liquid from the moment it is marked until it is unmarked, and only that window
+            assert!(!super::liquid(7001));
+            super::set_liquid_popup(7001, true);
+            assert!(super::liquid(7001) && !super::liquid(7002));
+            super::set_liquid_popup(7001, false);
+            assert!(!super::liquid(7001));
+        }
         // no window handle, no mark
         super::set_liquid_popup(0, true);
         assert!(!super::liquid(0));
@@ -726,7 +737,7 @@ mod tests {
         super::set_shown(7003, true);
         assert!(super::liquid(7003));
         super::set_shown(7003, false);
-        assert!(!super::liquid(7003));
+        assert_eq!(super::liquid(7003), crate::settings::materials_available());
     }
 
     #[test]

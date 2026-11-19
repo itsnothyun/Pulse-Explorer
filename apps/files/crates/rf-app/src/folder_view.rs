@@ -463,6 +463,12 @@ pub struct FolderView {
     pending_rename: bool,
     /// Shown by the Open/Save dialog: opening a file picks it instead.
     picking: bool,
+    /// A browser tab (`Location::Web`): what its page tells us, and the task that listens (`web_view`). `web_sent` is the address the
+    /// tab sent its page to last: the page's first answer after that is the same visit (maybe redirected), not a new step back.
+    web_events: Option<(futures::channel::mpsc::UnboundedSender<crate::web_view::WebEvent>, Task<()>)>,
+    web_sent: Option<String>,
+    /// This view's id: the key of its page in `web_view`.
+    web_id: EntityId,
     /// A recent item of the Home page pressed with the left button, and where: moved far enough, it is dragged out (`drag_paths_out`).
     home_press: Option<(PathBuf, Point<Pixels>)>,
     /// Ctrl and the wheel turned so far toward the next size step (a touchpad turns in small pixel steps).
@@ -537,6 +543,8 @@ impl FolderView {
     pub fn new(location: Location, places: Entity<Places>, images: Entity<ImageCache>, cx: &mut Context<Self>) -> Self {
         cx.observe(&places, |_, _, cx| cx.notify()).detach();
         cx.observe(&images, |_, _, cx| cx.notify()).detach();
+        // a browser tab's page goes with the tab
+        cx.on_release(|this, _| crate::web_view::close(this.web_id)).detach();
         // a tag given or taken: the groups by tag follow
         cx.observe_global::<crate::tags::Tags>(|this, cx| {
             // (a sort by tag makes its ranks again; any other key: one comparison)
@@ -545,6 +553,19 @@ impl FolderView {
                 this.refresh_tag_snap(cx);
                 this.rebuild_visible();
                 cx.notify();
+            }
+        })
+        .detach();
+        // Pulse Explorer's library views list from the library scan and the favorites: they follow both
+        cx.observe_global::<crate::pulse_library::Library>(|this, cx| {
+            if matches!(this.location(), Location::Pulse { key, .. } if key != "recent" && key != "favorites") {
+                this.load(cx);
+            }
+        })
+        .detach();
+        cx.observe_global::<crate::pulse_library::Favorites>(|this, cx| {
+            if matches!(this.location(), Location::Pulse { key, .. } if key == "favorites") {
+                this.load(cx);
             }
         })
         .detach();
@@ -640,6 +661,9 @@ impl FolderView {
             reselect_many: None,
             pending_rename: false,
             picking: false,
+            web_events: None,
+            web_sent: None,
+            web_id: cx.entity_id(),
             home_press: None,
             zoom_acc: 0.0,
             name_hit: false,
@@ -708,6 +732,11 @@ impl FolderView {
         if let Location::DiskUsage(p) = self.location() {
             return crate::disk_usage::title(p);
         }
+        if let Location::Web { .. } = self.location() {
+            if let Some(t) = self.web_title() {
+                return t;
+            }
+        }
         crate::i18n::td(&self.location().title())
     }
 
@@ -718,6 +747,8 @@ impl FolderView {
             Location::RecycleBin => L::Trash,
             Location::Search { .. } => L::Search,
             Location::Tag(_) => L::Tag,
+            Location::Pulse { key, .. } => crate::pulse_library::icon(key),
+            Location::Web { .. } => L::Globe,
             Location::Library { .. } => L::Library,
             Location::Shell { .. } => L::Usb,
             Location::DiskUsage(_) => L::ChartPie,
@@ -950,7 +981,80 @@ impl FolderView {
         }
     }
 
+    /// The page's own title, once it has one.
+    pub fn web_title(&self) -> Option<String> {
+        self.web_events.as_ref().and_then(|_| crate::web_view::title(self.web_id))
+    }
+
+    /// The browser tab's page: an empty area the page is laid over (`web_view::place`), and the listener for what the page does.
+    fn render_web(&mut self, url: String, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        if self.web_events.is_none() {
+            let (tx, mut rx) = futures::channel::mpsc::unbounded::<crate::web_view::WebEvent>();
+            let task = cx.spawn(async move |this, cx| {
+                while let Some(ev) = rx.next().await {
+                    let _ = this.update(cx, |v, cx| v.on_web_event(ev, cx));
+                }
+            });
+            self.web_events = Some((tx, task));
+            // the page is a window of its own over ours (`web_view`): when ours moves, it is placed again
+            cx.observe_window_bounds(window, |_, _, cx| cx.notify()).detach();
+        }
+        let id = self.web_id;
+        let hwnd = crate::look::window::hwnd_of(window);
+        if let Some((tx, _)) = &self.web_events {
+            if self.web_sent.as_deref() != Some(url.as_str()) {
+                self.web_sent = Some(url.clone());
+            }
+            crate::web_view::ensure(id, hwnd, &url, tx.clone());
+        }
+        div()
+            .size_full()
+            .child(
+                canvas(
+                    move |b, window, _| {
+                        let s = window.scale_factor();
+                        let r = windows::Win32::Foundation::RECT {
+                            left: (f32::from(b.origin.x) * s).round() as i32,
+                            top: (f32::from(b.origin.y) * s).round() as i32,
+                            right: (f32::from(b.origin.x + b.size.width) * s).round() as i32,
+                            bottom: (f32::from(b.origin.y + b.size.height) * s).round() as i32,
+                        };
+                        crate::web_view::place(id, r);
+                    },
+                    |_, _, _, _| {},
+                )
+                .size_full(),
+            )
+            .into_any_element()
+    }
+
+    fn on_web_event(&mut self, ev: crate::web_view::WebEvent, cx: &mut Context<Self>) {
+        use crate::web_view::WebEvent;
+        match ev {
+            WebEvent::Url(url) => {
+                let here = Location::Web { url: url.clone() };
+                if self.location() == &here {
+                    return;
+                }
+                // the answer to where the tab sent the page (a redirect) takes that visit's place; a link is a new step
+                if self.web_sent.take().is_some() {
+                    self.history.replace(here);
+                } else {
+                    self.history.navigate(here);
+                }
+                self.web_sent = Some(url);
+            }
+            WebEvent::Title(_) => {}
+            WebEvent::NewTab(url) => cx.emit(FolderEvent::OpenInNewTab(Location::Web { url })),
+        }
+        cx.notify();
+    }
+
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
+        if matches!(self.location(), Location::Web { .. }) {
+            crate::web_view::reload(self.web_id);
+            return;
+        }
         // (a customised folder's icon may have changed without its time or attributes: ask for those again)
         crate::image_cache::refresh_folder_icons();
         self.column_cache.clear();
@@ -1294,8 +1398,17 @@ impl FolderView {
             cx.notify();
             return;
         }
-        if let Location::Tag(id) = self.location().clone() {
-            let paths = cx.global::<crate::tags::Tags>().0.paths_with(id);
+        // Pulse Explorer's library views (Library, Recent, Favorites, a type) list a set of paths, as a tag does
+        let listed: Option<Vec<std::path::PathBuf>> = match self.location().clone() {
+            Location::Tag(id) => Some(cx.global::<crate::tags::Tags>().0.paths_with(id)),
+            Location::Pulse { key, .. } if key == "recent" => {
+                let cleared = cx.global::<crate::settings::Settings>().recent_cleared_ms;
+                Some(self.places.read(cx).recent.iter().filter(|r| r.used_ms > cleared).map(|r| r.target.clone()).collect())
+            }
+            Location::Pulse { key, .. } => Some(crate::pulse_library::paths(&key, cx)),
+            _ => None,
+        };
+        if let Some(paths) = listed {
             self.loading = true;
             self.load_started = Instant::now();
             let generation = self.generation;
@@ -2925,7 +3038,7 @@ impl FolderView {
 
     /// Results from many folders (search, tag): entries carry their own parent folder.
     pub fn is_search(&self) -> bool {
-        matches!(self.location(), Location::Search { .. } | Location::Tag(_) | Location::Library { .. })
+        matches!(self.location(), Location::Search { .. } | Location::Tag(_) | Location::Library { .. } | Location::Pulse { .. })
     }
 
     /// Folder containing entry `ei` (differs per entry in search results).
@@ -4043,7 +4156,7 @@ impl FolderView {
                 .cursor_pointer()
                 .hover(|s| s.bg(p.tile_hover))
         };
-        let section = |title: &'static str| div().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(p.text).child(title);
+        let section = |title: &'static str| crate::theme::subheading(div()).text_color(p.text).child(title);
 
         // equal-width columns: a card alone on the last row is as wide as the others
         let avail = f32::from(self.content_width) - 48.; // p_6 on both sides
@@ -4171,6 +4284,7 @@ impl FolderView {
         }
 
         let has_recent = !recent.is_empty() && shown("recent");
+        let pulse_workspace = self.render_pulse_workspace(p, cx);
         let has_devices = has_devices && shown("devices");
         let mut recent_list = v_flex().gap_0p5().max_w(px(900.));
         for (i, r) in recent.into_iter().enumerate() {
@@ -4274,6 +4388,7 @@ impl FolderView {
                 v_flex()
                     .p_6()
                     .gap_4()
+                    .when(shown("workspace"), |d| d.child(pulse_workspace).child(div().h_2()))
                     .when(shown("quick"), |d| d.child(section(t!("Hızlı Erişim"))).child(pinned_grid).child(div().h_2()))
                     .when(shown("drives"), |d| d.child(section(t!("Sürücüler"))).child(drive_grid))
                     .when(has_devices, |d| d.child(div().h_2()).child(section(t!("Cihazlar"))).child(device_grid))
@@ -4307,6 +4422,124 @@ impl FolderView {
                     }),
             )
             .into_any_element()
+    }
+}
+
+impl FolderView {
+    /// Pulse Explorer's workspace, ported from its web Home: the pixel WORKSPACE heading, the stat tiles, the
+    /// files by type and the starred files, all from the library scan of the user's folders (`pulse_library`).
+    fn render_pulse_workspace(&mut self, p: &Palette, cx: &mut Context<Self>) -> AnyElement {
+        use crate::pulse_library::{self as lib, Favorites, Library, TYPES};
+        let library = cx.default_global::<Library>();
+        let (files, bytes, scanned) = (library.count(None), library.bytes(), library.scanned);
+        let by_type: Vec<usize> = (0..TYPES.len()).map(|i| library.count(Some(i))).collect();
+        let favorites: Vec<std::path::PathBuf> = cx.try_global::<Favorites>().map(|f| f.0.clone()).unwrap_or_default();
+        let recent = self.places.read(cx).recent.len();
+        let pixel = |size: f32| div().font_family(theme::HEADING_FONT).text_size(px(size)).line_height(px(size));
+
+        // the heading: eyebrow, the big dot title, one line under it
+        let heading = v_flex()
+            .gap_2()
+            .child(h_flex().gap_2().items_center().child(div().w(px(36.)).h(px(2.)).bg(p.text_tertiary)).child(pixel(15.).text_color(p.text_secondary).child("Home")))
+            .child(pixel(40.).text_color(p.text).child("Workspace"))
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(p.text_secondary)
+                    .child(crate::i18n::tx("Her şey bu cihazda kalır. Klasörleriniz, Pulse'un gördüğü gibi sıralanır.", "Everything stays on this device. Your folders, sorted the way Pulse sees them.")),
+            );
+
+        // the stat tiles, one card with hairlines between them
+        let stat = |label: &'static str, value: String, note: &'static str, last: bool| {
+            v_flex()
+                .flex_1()
+                .min_w_0()
+                .p_4()
+                .gap_2()
+                .when(!last, |d| d.border_r_1().border_color(p.border))
+                .child(pixel(15.).text_color(p.text_secondary).child(label))
+                .child(pixel(30.).text_color(p.text).child(value))
+                .child(div().text_sm().text_color(p.text_tertiary).child(note))
+        };
+        let dash = |n: String| if scanned { n } else { "-".to_string() };
+        let stats = h_flex()
+            .rounded(theme::RADIUS)
+            .bg(p.tile_bg)
+            .border_1()
+            .border_color(p.border)
+            .child(stat("Files", dash(files.to_string()), "in your library", false))
+            .child(stat("Storage", dash(rf_core::format::size(bytes)), "kept on this device", false))
+            .child(stat("Favorites", favorites.len().to_string(), "starred", false))
+            .child(stat("Recent", recent.to_string(), "opened lately", true));
+
+        // files by type: a segmented bar per type, lit in proportion to the biggest; a click opens the type
+        let most = by_type.iter().copied().max().unwrap_or(0).max(1);
+        const SEGMENTS: usize = 24;
+        let mut types = v_flex().gap_1().max_w(px(560.));
+        for (i, n) in by_type.iter().copied().enumerate() {
+            let t = &TYPES[i];
+            let lit = if n == 0 { 0 } else { (n * SEGMENTS).div_ceil(most) };
+            let mut bar = h_flex().flex_1().gap(px(2.));
+            for s in 0..SEGMENTS {
+                bar = bar.child(div().flex_1().h(px(6.)).rounded(px(1.)).bg(if s < lit { p.text } else { p.hover }));
+            }
+            let loc = lib::location(t.key);
+            types = types.child(
+                h_flex()
+                    .id(("pulse-type", i))
+                    .h(px(28.))
+                    .px_2()
+                    .gap_3()
+                    .items_center()
+                    .rounded(theme::RADIUS_SM)
+                    .text_sm()
+                    .cursor_pointer()
+                    .hover(|s| s.bg(p.hover))
+                    .child(Icon::new(t.icon).size(px(16.)).text_color(p.text_secondary))
+                    .child(div().w(px(90.)).flex_shrink_0().text_color(p.text_secondary).child(t.name))
+                    .child(bar)
+                    .child(div().w(px(48.)).flex_shrink_0().text_right().text_color(p.text).child(dash(n.to_string())))
+                    .on_click(cx.listener(move |this, _, _, cx| this.navigate(loc.clone(), cx))),
+            );
+        }
+
+        // the starred files
+        let mut stars = v_flex().gap_0p5().max_w(px(560.));
+        for (i, path) in favorites.iter().take(8).enumerate() {
+            let name = path.file_name().map_or_else(|| path.to_string_lossy().into_owned(), |n| n.to_string_lossy().into_owned());
+            let target = path.clone();
+            let is_dir = path.is_dir();
+            stars = stars.child(
+                h_flex()
+                    .id(("pulse-fav", i))
+                    .h(theme::ROW_H)
+                    .px_2()
+                    .gap_3()
+                    .items_center()
+                    .rounded(theme::RADIUS_SM)
+                    .text_sm()
+                    .cursor_pointer()
+                    .hover(|s| s.bg(p.hover))
+                    .child(Icon::new(L::Star).size(px(14.)).text_color(p.text))
+                    .child(div().flex_1().min_w_0().overflow_hidden().text_ellipsis().whitespace_nowrap().child(name))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if is_dir {
+                            this.navigate(Location::Path(target.clone()), cx);
+                        } else {
+                            open_in_background(target.clone(), cx);
+                        }
+                    })),
+            );
+        }
+
+        let column = |title: &'static str, body: AnyElement| {
+            v_flex().flex_1().min_w(px(280.)).gap_2().child(crate::theme::subheading(div()).text_color(p.text).child(title)).child(body)
+        };
+        let mut lower = h_flex().flex_wrap().gap_6().items_start().child(column("By type", types.into_any_element()));
+        if !favorites.is_empty() {
+            lower = lower.child(column("Favorites", stars.into_any_element()));
+        }
+        v_flex().gap_5().child(heading).child(stats).child(lower).into_any_element()
     }
 }
 
@@ -4605,6 +4838,11 @@ mod gutter_tests {
 }
 
 pub(crate) fn open_in_background(path: PathBuf, cx: &mut App) {
+    // Pulse Explorer's browser: a web page opens as a browser tab
+    if crate::web_view::is_web_file(&path) && !rf_win::ftp::is_ftp(&path) && path.is_file() {
+        crate::web_view::request_tab(crate::web_view::file_url(&path), cx);
+        return;
+    }
     // (the name test first: it costs nothing, and `exists` on a place that has to wake up holds the UI thread)
     if !rf_win::ftp::is_ftp(&path) && crate::nav_touch::may_hold_archive(&path) && !path.exists() && crate::archive_view::split(&path).is_some() {
         // an item inside an archive: extract just it (Status Center), open the real file
@@ -4651,6 +4889,10 @@ impl Render for FolderView {
         }
         let content = match self.location() {
             Location::Home => self.render_home(&p, cx),
+            Location::Web { url } => {
+                let url = url.clone();
+                self.render_web(url, window, cx)
+            }
             Location::Settings => crate::settings_view::render(&p, window, cx, self.lens_owner),
             Location::DiskUsage(root) => {
                 let root = root.clone();

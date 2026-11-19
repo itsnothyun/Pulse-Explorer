@@ -384,7 +384,7 @@ fn sub(p: &Palette, title: &str, desc: Option<&str>, control: AnyElement) -> Any
 }
 
 pub(crate) fn section(p: &Palette, title: &str) -> AnyElement {
-    div().pt_5().pb_1().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(p.text).child(title.to_string()).into_any_element()
+    crate::theme::subheading(div().pt_5().pb_1()).text_color(p.text).child(title.to_string()).into_any_element()
 }
 
 fn link_row(p: &Palette, id: &'static str, icon: L, title: &str, desc: Option<&str>, run: impl Fn(&mut Window, &mut App) + 'static) -> AnyElement {
@@ -426,7 +426,7 @@ pub fn render(p: &Palette, window: &mut Window, cx: &mut App, lens_owner: bool) 
     // (scrolls: the 13 entries need more than the 420 px the window may be as low as)
     let mut nav = v_flex().id("settings-nav").w(px(if strip { NAV_STRIP_W } else { NAV_W })).flex_shrink_0().h_full().overflow_y_scroll().px_3().pt_5().gap_0p5();
     if !strip {
-        nav = nav.child(div().px_2().pb_3().text_xl().font_weight(FontWeight::SEMIBOLD).child(t!("Ayarlar"))).child(
+        nav = nav.child(crate::theme::heading(div().px_2().pb_3()).child(t!("Ayarlar"))).child(
             h_flex()
                 .h(px(32.))
                 .mb_2()
@@ -567,7 +567,7 @@ pub fn render(p: &Palette, window: &mut Window, cx: &mut App, lens_owner: bool) 
                     .pt_5()
                     .pb_8()
                     .gap_2()
-                    .child(div().pb_2().text_xl().font_weight(FontWeight::SEMIBOLD).child(title))
+                    .child(crate::theme::heading(div().pb_2()).child(title))
                     .children(body),
             ),
         )
@@ -1564,6 +1564,11 @@ fn appearance(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
                     let on = shown("network");
                     move |_, cx| settings::update(cx, |s| show_section(s, "network", !on))
                 })),
+                // Pulse Explorer's file types (pulse_library)
+                sub(&pp, "Types", None, switch("sb-types", &pp, shown("types"), {
+                    let on = shown("types");
+                    move |_, cx| settings::update(cx, |s| show_section(s, "types", !on))
+                })),
                 sub(&pp, t!("Etiketler"), None, switch("sb-tags", &pp, shown("tags"), {
                     let on = shown("tags");
                     move |_, cx| settings::update(cx, |s| show_section(s, "tags", !on))
@@ -1640,7 +1645,9 @@ fn appearance(p: &Palette, s: &Settings, cx: &mut App) -> Vec<AnyElement> {
         None,
         None,
         move || {
-            const SECTIONS: [(&str, &str, &str); 6] = [
+            const SECTIONS: [(&str, &str, &str); 7] = [
+                // Pulse Explorer's workspace (folder_view `render_pulse_workspace`)
+                ("workspace", "hm-workspace", "Workspace"),
                 ("quick", "hm-quick", "Hızlı Erişim"),
                 ("drives", "hm-drives", "Sürücüler"),
                 ("devices", "hm-devices", "Cihazlar"),

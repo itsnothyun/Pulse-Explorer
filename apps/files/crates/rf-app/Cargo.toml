@@ -27,6 +27,8 @@ rf-nearby.workspace = true
 rf-player.workspace = true
 rustdecoder.workspace = true
 gpui-kit.workspace = true
+# Pulse Explorer's browser tabs: Edge's WebView2 as a child of the window (web_view.rs)
+webview2-com = "0.39"
 anyhow.workspace = true
 log.workspace = true
 env_logger = "0.11"

@@ -745,7 +745,7 @@ pub enum FerryVisibility {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            theme: ThemePref::System,
+            theme: ThemePref::Dark,
             language: Lang::System,
             default_view: DefaultView::Adaptive,
             show_hidden: false,
@@ -801,7 +801,8 @@ impl Default for Settings {
             smooth_scroll: true,
             show_scrollbar: true,
             animations: AnimPref::System,
-            backdrop: BackdropPref::Mica,
+            // Pulse Explorer's look: HyperGlass, drawn monochrome (rf_win glass/gpu.rs), over Pulse's dark wash
+            backdrop: BackdropPref::Glass,
             tint: None,
             background_image: None,
             background_opacity: 0.2,
@@ -915,7 +916,8 @@ impl Global for Settings {}
 /// (`LookParams::DEFAULT`, a test keeps them equal); the surface default is the wash the app shipped with over glass.
 pub const HG_DEFAULT: [u8; 5] = [52, 50, 67, 62, 50];
 
-static THEME: AtomicU8 = AtomicU8::new(0);
+// (2: Dark until the settings are read, the default of Pulse Explorer's build)
+static THEME: AtomicU8 = AtomicU8::new(2);
 /// The surface value (0..=100) the palette reads on every call, cheaper than the settings struct.
 static HG_SURFACE: AtomicU8 = AtomicU8::new(HG_DEFAULT[4]);
 static SOLID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -1177,6 +1179,8 @@ impl Settings {
         HG_SURFACE.store(self.hg_surface.min(100), Ordering::Relaxed);
         rf_win::glass::set_look(self.hyperglass_look());
         rf_win::glass::set_freeze_when_behind(self.hg_freeze_behind);
+        // Pulse Explorer's build: monochrome glass
+        rf_win::glass::set_monochrome(true);
         gpui_windows::SMOOTH_SCROLL.store(self.smooth_scroll, Ordering::Relaxed);
         THEME.store(
             match self.theme {
@@ -1220,6 +1224,7 @@ static BASELINE: crate::settings_merge::BaselineCell = parking_lot::Mutex::new(N
 /// Keeps gpui-component widgets (inputs, menus) in the same light/dark mode as our palette.
 pub fn apply_component_theme(cx: &mut App) {
     use gpui_kit::component::theme::{Theme, ThemeMode};
+    crate::theme::register_fonts(cx);
     match cx.global::<Settings>().theme {
         ThemePref::Light => Theme::change(ThemeMode::Light, None, cx),
         ThemePref::Dark | ThemePref::Black => Theme::change(ThemeMode::Dark, None, cx),
@@ -1401,8 +1406,8 @@ yeni_alan = 3").unwrap();
         assert_eq!(back.backdrop, BackdropPref::Glass);
         // through the loader the app uses
         assert_eq!(Settings::parse_lenient(&text).unwrap().backdrop, BackdropPref::Glass);
-        // the default stays Mica
-        assert_eq!(Settings::default().backdrop, BackdropPref::Mica);
+        // the default is Glass (Pulse Explorer's monochrome liquid glass)
+        assert_eq!(Settings::default().backdrop, BackdropPref::Glass);
     }
 
     #[test]
@@ -1470,13 +1475,13 @@ hg_tint = 101
     #[test]
     fn unknown_backdrop_value_costs_only_that_field() {
         // what a version without Glass meets after the user picked it and went back: the value
-        // is dropped (Mica), every other setting of the file survives
+        // is dropped (the default), every other setting of the file survives
         use super::BackdropPref;
         let s = Settings::parse_lenient("backdrop = \"cam\"
 show_hidden = true
 theme = \"dark\"
 ").unwrap();
-        assert_eq!(s.backdrop, BackdropPref::Mica);
+        assert_eq!(s.backdrop, BackdropPref::Glass);
         assert!(s.show_hidden);
         assert_eq!(s.theme, super::ThemePref::Dark);
     }

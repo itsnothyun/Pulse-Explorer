@@ -229,6 +229,17 @@ impl FolderView {
             let d = target_dir.clone();
             v.push(Item::action(t!("Kenar çubuğuna sabitle"), icon(L::Pin), act(me, move |v, _, cx| v.pin(d.clone(), cx))));
         }
+        // Pulse Explorer's favorites (pulse_library): star the selection, or take the star off when all of it has one
+        if !in_archive && !items.is_empty() {
+            let starred = items.iter().all(|i| crate::pulse_library::is_favorite(cx, i));
+            let sel = items.to_vec();
+            let (label, glyph) = if starred {
+                (crate::i18n::tx("Sık kullanılanlardan çıkar", "Remove from Favorites"), L::StarOff)
+            } else {
+                (crate::i18n::tx("Sık kullanılanlara ekle", "Add to Favorites"), L::Star)
+            };
+            v.push(Item::action(label, icon(glyph), move |_, cx| crate::pulse_library::toggle_favorites(cx, &sel)));
+        }
         if single_dir && crate::archive_view::split(&target_dir).is_none() {
             let d = target_dir.clone();
             let label = match crate::aliases::name_of(&d) {

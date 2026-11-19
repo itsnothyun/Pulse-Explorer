@@ -956,7 +956,7 @@ impl Workspace {
         view.update(cx, |t, cx| t.sync(path.as_deref(), shown_elsewhere, lens, cx));
         col.track_scroll(&self.side_tree.scroll).child(
             v_flex()
-                .child(div().px_2().pt_3().pb_1().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(p.text_tertiary).child(t!("Klasörler")))
+                .child(crate::theme::subheading(div().px_2().pt_3().pb_1()).text_color(p.text_tertiary).child(t!("Klasörler")))
                 .child(view),
         )
     }

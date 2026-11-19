@@ -53,6 +53,12 @@ impl Workspace {
     ///
     /// Called by the Enter handler of the address field only.
     pub(super) fn enter_address_text(&mut self, text: String, from_completion: bool, window: &mut Window, cx: &mut Context<Self>) {
+        // Pulse Explorer's browser: a web address opens in this tab as a page (`web_view`), never as a program
+        if !from_completion && crate::web_view::looks_like_url(&text) {
+            self.navigate(Location::Web { url: crate::web_view::normalize(&text) }, window, cx);
+            cx.notify();
+            return;
+        }
         let Some(loc) = parse_location(&text) else {
             self.focus_active(window, cx);
             cx.notify();
