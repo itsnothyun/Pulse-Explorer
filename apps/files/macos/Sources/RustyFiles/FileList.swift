@@ -533,6 +533,8 @@ final class StatusBarView: FlippedView {
     var progress = "" { didSet { needsDisplay = true } }
     var progressFraction: Double? { didSet { needsDisplay = true } }
     var performance = "" { didSet { needsDisplay = true } }
+    /// The repository's branch and changes, when the folder is in one (DevTools.swift).
+    var git = "" { didSet { needsDisplay = true } }
 
     override func draw(_ dirtyRect: NSRect) {
         let p = Palette.of(self)
@@ -540,7 +542,7 @@ final class StatusBarView: FlippedView {
         NSRect(x: 0, y: 0, width: bounds.width, height: 1).fill()
         // px_3, gap_3, text_xs
         var r = NSRect(x: 12, y: 1, width: bounds.width - 24, height: bounds.height - 1)
-        let right = [progress, performance].filter { !$0.isEmpty }.joined(separator: "   ")
+        let right = [git, progress, performance].filter { !$0.isEmpty }.joined(separator: "   ")
         if !right.isEmpty {
             let rw = min(Draw.textWidth(right, font: Metrics.textXs), r.width * 0.6)
             var x = r.maxX - rw

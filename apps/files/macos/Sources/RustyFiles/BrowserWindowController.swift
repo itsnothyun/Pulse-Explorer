@@ -30,6 +30,8 @@ final class BrowserTab {
     var isPage: Bool { isSettings || isHome || isWeb }
     /// A tag's results (rustyfiles:tag/<name>): the files that have it, from anywhere.
     var tagName: String? { TagStore.name(of: url) }
+    /// A search's results (rustyfiles:search?in=…&q=…, SearchPlace).
+    var search: (dir: URL, query: String)? { SearchPlace.parse(url) }
 
     var info: TabInfo {
         if isSettings { return TabInfo(title: String(localized: "Settings"), icon: "settings") }
@@ -39,6 +41,7 @@ final class BrowserTab {
             return TabInfo(title: title, icon: "globe")
         }
         if let tag = tagName { return TabInfo(title: tag, icon: "tag") }
+        if let s = search { return TabInfo(title: "“\(s.query)”", icon: "search") }
         let fm = FileManager.default
         let home = fm.homeDirectoryForCurrentUser.standardizedFileURL
         if url == home { return TabInfo(title: fm.displayName(atPath: url.path), icon: "house") }
@@ -260,6 +263,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         omni.breadcrumb.onNavigate = { [weak self] url in self?.navigate(to: url) }
         omni.breadcrumb.onHome = { [weak self] in self?.goHome(nil) }
         omni.onSubmitPath = { [weak self] text in self?.submitPath(text) }
+        omni.onSearch = { [weak self] text in self?.searchSubfolders(text) }
         omni.onFilter = { [weak self] text in
             self?.list.filter = text
             self?.list.commandBar.filter.isOn = !text.isEmpty
@@ -487,6 +491,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         tab.back.append(tab.url)
         tab.forward.removeAll()
         tab.url = url
+        CommandPalette.noteVisit(url)
         tab.selection = name.map { [$0] } ?? []
         tab.scrollY = nil
         navBar.omnibar.end()
@@ -521,7 +526,10 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
             }
             let began = Date()
             let result: Result<Folder, Error>
-            if let tag = TagStore.name(of: url) {
+            if let s = SearchPlace.parse(url) {
+                let paths = SearchPlace.run(s.dir, s.query)
+                result = .success(Folder.gathered(label: url.absoluteString, paths: paths, column: column, ascending: ascending, foldersFirst: first, showHidden: hidden))
+            } else if let tag = TagStore.name(of: url) {
                 let paths = TagStore.files(tagged: tag)
                 result = .success(Folder.gathered(label: url.absoluteString, paths: paths, column: column, ascending: ascending, foldersFirst: first, showHidden: hidden))
             } else {
@@ -665,6 +673,9 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
             navBar.omnibar.breadcrumb.segments = [BreadcrumbView.Segment(title: String(localized: "Settings"), url: BrowserTab.settingsURL)]
         } else if tab.isHome {
             navBar.omnibar.breadcrumb.segments = [BreadcrumbView.Segment(title: String(localized: "Home"), url: BrowserTab.homeURL)]
+        } else if let s = tab.search {
+            navBar.omnibar.breadcrumb.segments = BreadcrumbView.segments(for: s.dir)
+                + [BreadcrumbView.Segment(title: String(localized: "Search “\(s.query)”"), url: tab.url)]
         } else if let tag = tab.tagName {
             navBar.omnibar.breadcrumb.segments = [BreadcrumbView.Segment(title: String(localized: "Tags"), url: BrowserTab.homeURL), BreadcrumbView.Segment(title: tag, url: tab.url)]
         } else {
@@ -748,6 +759,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         if tab.isSettings { return goHome(sender) }
         if tab.isHome || tab.isWeb { return }
         if tab.tagName != nil { return goHome(sender) }
+        if let s = tab.search { return navigate(to: s.dir) }
         let parent = tab.url.deletingLastPathComponent()
         guard parent.path != tab.url.path else { return }
         navigate(to: parent, selecting: AppSettings.upSelectsPrevious ? tab.url.lastPathComponent : nil)
@@ -832,6 +844,15 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     }
     @objc func focusSearch(_ sender: Any?) { navBar.omnibar.mode == .filter ? navBar.omnibar.end() : navBar.omnibar.begin(.filter) }
     @objc func focusAddress(_ sender: Any?) { navBar.omnibar.begin(.path) }
+    /// ⌘K: every command and place, by typing (CommandPalette.swift).
+    @objc func showCommandPalette(_ sender: Any?) { CommandPalette.toggle(for: self) }
+    /// ⇧⌘F: the search field for this folder and everything under it.
+    @objc func focusDeepSearch(_ sender: Any?) { navBar.omnibar.begin(.search) }
+
+    private func searchSubfolders(_ text: String) {
+        let dir = tab.search?.dir ?? (tab.url.isFileURL && !tab.isWeb ? tab.url : FileManager.default.homeDirectoryForCurrentUser)
+        navigate(to: SearchPlace.url(in: dir, query: text))
+    }
     @objc func newFolder(_ sender: Any?) { list.newFolder() }
     @objc func cut(_ sender: Any?) { list.cutItems() }
     @objc func copy(_ sender: Any?) { list.copyItems() }
@@ -908,7 +929,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         case #selector(openSelection(_:)), #selector(cut(_:)), #selector(BrowserWindowController.copy(_:) as (BrowserWindowController) -> (Any?) -> Void), #selector(moveToTrash(_:)),
             #selector(toggleQuickLook(_:)):
             return selected
-        case #selector(rename(_:)): return list.selectedNames.count == 1
+        case #selector(rename(_:)): return !list.selectedNames.isEmpty
         case #selector(paste(_:)): return Clipboard.hasFiles && list.folder != nil
         case #selector(newFolder(_:)): return list.folder != nil
         case #selector(selectNextTab(_:)), #selector(selectPreviousTab(_:)): return tabs.count > 1

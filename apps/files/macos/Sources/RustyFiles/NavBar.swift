@@ -165,7 +165,8 @@ final class BreadcrumbView: HoverView {
 /// (accent while typing), the breadcrumb, a divider and the two mode buttons.
 @MainActor
 final class OmnibarView: FlippedView, NSTextFieldDelegate {
-    enum Mode { case breadcrumb, path, filter }
+    /// `search`: the folder and everything under it (SearchPlace), started with ⇧⌘F or ⌘↩ in the filter.
+    enum Mode { case breadcrumb, path, filter, search }
 
     let breadcrumb = BreadcrumbView()
     let field = NSTextField()
@@ -176,6 +177,7 @@ final class OmnibarView: FlippedView, NSTextFieldDelegate {
     private(set) var mode: Mode = .breadcrumb
     var currentPath = ""
     var onSubmitPath: ((String) -> Void)?
+    var onSearch: ((String) -> Void)?
     var onFilter: ((String) -> Void)?
 
     override init(frame: NSRect) {
@@ -242,13 +244,16 @@ final class OmnibarView: FlippedView, NSTextFieldDelegate {
         mode = m
         breadcrumb.isHidden = true
         field.isHidden = false
-        searchButton.isOn = m == .filter
+        searchButton.isOn = m == .filter || m == .search
         commandButton.isOn = m == .path
         if m == .path {
             field.placeholderString = nil
             field.stringValue = currentPath
+        } else if m == .search {
+            field.placeholderString = String(localized: "Search this folder and its subfolders")
+            field.stringValue = ""
         } else {
-            field.placeholderString = String(localized: "Filter by name")
+            field.placeholderString = String(localized: "Filter by name  ·  ⌘↩ searches subfolders")
             field.stringValue = ""
         }
         window?.makeFirstResponder(field)
@@ -278,6 +283,12 @@ final class OmnibarView: FlippedView, NSTextFieldDelegate {
                 let text = field.stringValue
                 end()
                 onSubmitPath?(text)
+            } else if mode == .search || NSApp.currentEvent?.modifierFlags.contains(.command) == true {
+                // the folder and everything under it
+                let text = field.stringValue
+                guard !text.trimmingCharacters(in: .whitespaces).isEmpty else { return true }
+                end()
+                onSearch?(text)
             } else {
                 // Enter in the filter moves into the list, keeping the filter.
                 window?.makeFirstResponder(nil)

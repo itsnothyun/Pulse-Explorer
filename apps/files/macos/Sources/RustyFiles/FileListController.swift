@@ -646,7 +646,7 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
         let here = writable && !isGathered
         commandBar.cut.isEnabled = any && writable
         commandBar.copy.isEnabled = any
-        commandBar.rename.isEnabled = selectedRows.count == 1 && writable
+        commandBar.rename.isEnabled = !selectedRows.isEmpty && writable
         commandBar.share.isEnabled = any && writable
         commandBar.delete.isEnabled = any && writable
         commandBar.paste.isEnabled = here && Clipboard.hasFiles
@@ -864,6 +864,11 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
     }
 
     func beginRename() {
+        // several items: all of them at once, previewed first (BatchRename.swift)
+        if selectedRows.count > 1, archive == nil, let window = table.window {
+            BatchRename.show(selectedURLs, in: window) { [weak self] made in self?.reloadSelecting(made.map(\.lastPathComponent)) }
+            return
+        }
         guard let folder, selectedRows.count == 1, let row = selectedRows.first,
             let item = folder.item(row: UInt32(row))
         else { return }
@@ -1123,7 +1128,7 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
             ("scissors", String(localized: "Cut (⌘X)"), true, { [weak self] in self?.cutItems() }),
             ("copy", String(localized: "Copy (⌘C)"), true, { [weak self] in self?.copyItems() }),
             ("clipboard-paste", String(localized: "Paste (⌘V)"), Clipboard.hasFiles, { [weak self] in self?.pasteItems(into: singleDir ? urls.first : nil) }),
-            ("text-cursor-input", String(localized: "Rename (F2)"), items.count == 1, { [weak self] in self?.beginRename() }),
+            ("text-cursor-input", items.count == 1 ? String(localized: "Rename (F2)") : String(localized: "Rename \(items.count) items (F2)"), !items.isEmpty, { [weak self] in self?.beginRename() }),
             ("share-2", String(localized: "Share"), true, { [weak self] in self?.shareSelected() }),
             ("trash", String(localized: "Move to Trash (⌘⌫)"), true, { [weak self] in self?.trashSelected() }),
             ("wrench", String(localized: "Properties (⌘I)"), true, { PropertiesWindow.show(urls) }),
@@ -1139,6 +1144,9 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
         b.separator()
 
         b.add(String(localized: "Copy item path"), "clipboard-copy", key: "c", mods: [.command, .option]) { MenuActions.copyPaths(urls) }
+        // Pulse's developer tools (DevTools.swift): the path in other forms, the file in its repository
+        PathForms.menu(urls, into: b)
+        PathForms.gitMenu(urls, into: b)
         b.add(String(localized: "Make alias"), "link") { [weak self] in
             self?.run { try urls.map { try FileOps.makeAlias($0) } } done: { made in
                 FileUndo.shared.record(.trash(made), title: String(localized: "Make Alias"))
@@ -1320,6 +1328,7 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
                 MenuActions.setPinned(dir, !pinned)
             }
             b.add(String(localized: "Copy path"), "clipboard-copy") { MenuActions.copyPaths([dir]) }
+            PathForms.gitMenu([dir], into: b)
         }
         b.add(String(localized: "Show hidden items"), "eye", key: ".", mods: [.command, .shift], checked: showHidden) { AppSettings.showHidden.toggle() }
         if let dir = url, dir.isFileURL {
@@ -1786,7 +1795,22 @@ extension FileListController {
     func loadColumnData(_ dir: URL) {
         tagsByName = [:]
         gitByName = [:]
+        status.git = ""
         guard archive == nil else { return }
+        // the repository the folder is in: its branch and what changed, in the status bar
+        DispatchQueue.global(qos: .utility).async {
+            guard Repo.root(of: dir) != nil, let s = Repo.summary(dir) else { return }
+            var text = "⎇ \(s.branch)"
+            if s.ahead > 0 { text += "  ↑\(s.ahead)" }
+            if s.behind > 0 { text += "  ↓\(s.behind)" }
+            text += s.changed == 0 ? "  ·  " + String(localized: "clean") : "  ·  " + String(localized: "\(s.changed) changed")
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { [weak self] in
+                    guard let self, self.url?.standardizedFileURL == dir.standardizedFileURL else { return }
+                    self.status.git = text
+                }
+            }
+        }
         let wantTags = AppSettings.showsColumn(.tags), wantGit = AppSettings.showsColumn(.git)
         guard wantTags || wantGit else { return }
         DispatchQueue.global(qos: .utility).async {

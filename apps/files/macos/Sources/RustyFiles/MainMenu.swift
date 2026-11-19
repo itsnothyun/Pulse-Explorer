@@ -90,7 +90,9 @@ enum MainMenu {
         m.addItem(item(String(localized: "Move to Trash"), #selector(W.moveToTrash(_:)), key(NSBackspaceCharacter), .command))
         m.addItem(.separator())
         m.addItem(item(String(localized: "Filter"), #selector(W.focusSearch(_:)), "f"))
+        m.addItem(item(String(localized: "Search Subfolders"), #selector(W.focusDeepSearch(_:)), "f", [.command, .shift]))
         m.addItem(item(String(localized: "Go to Path"), #selector(W.focusAddress(_:)), "l"))
+        m.addItem(item(String(localized: "Command Palette…"), #selector(W.showCommandPalette(_:)), "k"))
         return m
     }
 
