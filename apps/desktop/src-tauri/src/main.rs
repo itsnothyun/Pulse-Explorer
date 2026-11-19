@@ -693,6 +693,8 @@ fn close_quickview(app: AppHandle) {
         return;
     }
     if let Some(win) = app.get_webview_window(QUICKVIEW) {
+        // the player pauses with it (a hidden window would otherwise keep playing)
+        let _ = win.emit_to(QUICKVIEW, "pulse://quickview-closed", ());
         let _ = win.hide();
     }
 }

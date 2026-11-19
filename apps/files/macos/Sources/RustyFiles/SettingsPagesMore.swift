@@ -47,8 +47,9 @@ enum OpenRules {
     /// out: they open like folders.
     static let pulseExts: Set<String> = [
         "pdf", "docx", "doc", "odt", "rtf", "pptx", "ppt", "odp", "xlsx", "xls", "ods", "csv", "tsv", "epub", "fb2", "png", "jpg",
-        "jpeg", "webp", "gif", "bmp", "ico", "svg", "md", "json", "yaml", "yml", "toml", "xml", "log", "ini", "txt", "mp4", "webm", "mp3",
-        "wav", "flac", "ogg", "aac",
+        "jpeg", "webp", "gif", "bmp", "ico", "svg", "md", "json", "yaml", "yml", "toml", "xml", "log", "ini", "txt",
+        // video and audio: Pulse's player (the Quick View window, PulsePlayer.tsx)
+        "mp4", "m4v", "mov", "webm", "mkv", "avi", "ogv", "mp3", "m4a", "wav", "flac", "ogg", "oga", "opus", "aac",
     ]
 
     /// Pulse Explorer's app: `PULSE_VIEWER`, which it sets when it starts the file manager, else the app this one is

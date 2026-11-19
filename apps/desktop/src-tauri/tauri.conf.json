@@ -120,11 +120,19 @@
       {
         "ext": [
           "mp4",
+          "m4v",
+          "mov",
           "webm",
+          "mkv",
+          "avi",
+          "ogv",
           "mp3",
+          "m4a",
           "wav",
           "flac",
           "ogg",
+          "oga",
+          "opus",
           "aac"
         ],
         "name": "Media File",

@@ -8,6 +8,7 @@ import {
   type QuickViewPayload,
 } from '../services/desktopBridge';
 import { QuickView } from './QuickView';
+import { PulsePlayer, isMediaPayload } from './PulsePlayer';
 
 /**
  * Root of the floating Quick View window. It keeps its own in-memory copy of
@@ -18,6 +19,8 @@ export function QuickViewWindow() {
   const importFiles = useWorkspaceStore((s) => s.importFiles);
   const [queue, setQueue] = useState<string[]>([]);
   const [batch, setBatch] = useState(0);
+  /** Video and audio go to Pulse's player, streamed from disk (never read into memory first). */
+  const [media, setMedia] = useState<QuickViewPayload[]>([]);
   const paths = useRef(new Map<string, string>());
 
   useEffect(() => {
@@ -32,7 +35,16 @@ export function QuickViewWindow() {
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let cancelled = false;
-    const onFiles = async (files: QuickViewPayload[]) => {
+    const onFiles = async (all: QuickViewPayload[]) => {
+      // a batch that starts with a video or a song plays (its media files make the playlist); the rest is viewed
+      if (all.length > 0 && isMediaPayload(all[0])) {
+        setQueue([]);
+        setMedia(all.filter(isMediaPayload));
+        setBatch((b) => b + 1);
+        return;
+      }
+      setMedia([]);
+      const files = all;
       const state = useWorkspaceStore.getState();
       const ids: string[] = [];
       for (const f of files) {
@@ -78,6 +90,19 @@ export function QuickViewWindow() {
     a.click();
     URL.revokeObjectURL(url);
   };
+
+  if (media.length > 0) {
+    return (
+      <PulsePlayer
+        key={batch}
+        items={media}
+        onClose={() => {
+          setMedia([]);
+          void closeQuickViewWindow();
+        }}
+      />
+    );
+  }
 
   if (queue.length === 0) return null;
 

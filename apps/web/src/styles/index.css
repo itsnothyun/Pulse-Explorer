@@ -666,3 +666,117 @@ html.qv-mac .rf-titlebar { height: 44px; padding-left: 80px; }
 .pdf-text-layer span, .pdf-text-layer br { color: transparent; position: absolute; white-space: pre; cursor: text; transform-origin: 0% 0%; }
 .pdf-text-layer ::selection { background: rgba(59, 130, 246, 0.35); }
 .pdf-text-layer .pdf-hit { background: rgba(252, 211, 77, 0.55); border-radius: 2px; }
+
+/* ---------------------------------------------------------------------------------------------------------------
+   Pulse Player (PulsePlayer.tsx): Quick View's window around a stage that plays the file from disk.
+   Monochrome like the rest: the picture brings the colour, the chrome stays grey glass.
+   --------------------------------------------------------------------------------------------------------------- */
+.pp-count { margin-left: 8px; font-size: 12px; color: #b3b3ad; font-variant-numeric: tabular-nums; }
+.pp-stage { background: #050505; isolation: isolate; }
+.pp-immersive .pp-stage { margin: 0; border-radius: 0; box-shadow: none; }
+.pp-idle { cursor: none; }
+
+/* the picture on an ambient glow of its own colours */
+.pp-ambient {
+  position: absolute; inset: -12%; width: 124%; height: 124%; z-index: -1;
+  filter: blur(64px) saturate(1.5) brightness(0.75); opacity: 0.55; transform: translateZ(0);
+  transition: opacity 600ms var(--ease-out);
+}
+.pp-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: transparent; }
+.pp-audio-el { display: none; }
+
+/* audio: the listening card */
+.pp-listen { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding-bottom: 72px;
+  background: radial-gradient(120% 90% at 50% 20%, rgba(242,242,237,0.07), transparent 60%); }
+.pp-disc { width: 132px; height: 132px; border-radius: 50%; display: grid; place-items: center; color: #f2f2ed;
+  background: radial-gradient(circle at 50% 50%, #151514 0 22%, #0c0c0b 23% 100%);
+  box-shadow: 0 0 0 1px rgba(242,242,237,0.12), 0 30px 60px -20px rgba(0,0,0,0.9), inset 0 0 0 10px rgba(242,242,237,0.03), inset 0 0 0 22px rgba(0,0,0,0.25);
+  margin-bottom: 8px; }
+.pp-spin { animation: pp-spin 8s linear infinite; }
+@keyframes pp-spin { to { transform: rotate(360deg); } }
+.pp-listen-name { font-size: 18px; font-weight: 600; color: #f2f2ed; max-width: 80%; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pp-listen-meta { font-size: 12px; color: #757573; font-family: var(--font-mono); }
+.pp-bars { display: flex; align-items: flex-end; gap: 3px; height: 34px; margin-top: 10px; }
+.pp-bars i { width: 4px; height: 6px; border-radius: 2px; background: #3a3a38; transition: background-color 300ms var(--ease-out); }
+.pp-bars-on i { background: #f2f2ed; animation: pp-bar 900ms ease-in-out infinite alternate; }
+@keyframes pp-bar { 0% { height: 4px; opacity: 0.5; } 50% { height: 26px; opacity: 1; } 100% { height: 10px; opacity: 0.7; } }
+
+/* the controls: a glass bar that fades away while the picture plays */
+.pp-controls {
+  position: absolute; left: 12px; right: 12px; bottom: 12px; z-index: 5;
+  padding: 10px 12px 8px; border-radius: 14px;
+  background: rgba(14, 14, 13, 0.62); backdrop-filter: blur(22px) saturate(1.4); -webkit-backdrop-filter: blur(22px) saturate(1.4);
+  box-shadow: inset 0 0 0 1px rgba(242,242,237,0.10), 0 18px 40px -18px rgba(0,0,0,0.9);
+  opacity: 0; transform: translateY(8px); pointer-events: none;
+  transition: opacity 220ms var(--ease-out), transform 260ms var(--ease-out);
+}
+.pp-shown { opacity: 1; transform: none; pointer-events: auto; }
+.pp-row { display: flex; align-items: center; gap: 2px; margin-top: 6px; }
+.pp-btn { display: inline-flex; align-items: center; gap: 6px; height: 30px; min-width: 30px; padding: 0 7px; justify-content: center;
+  border-radius: 8px; color: #f2f2ed; font-size: 12px;
+  transition: background-color 140ms var(--ease-out), transform 120ms var(--ease-out), color 140ms var(--ease-out); }
+.pp-btn:hover { background: rgba(242,242,237,0.09); }
+.pp-btn:active { transform: scale(0.92); }
+.pp-btn.pp-on, .pp-menu .pp-on { color: #090909; background: #f2f2ed; }
+.pp-play { width: 38px; height: 38px; border-radius: 50%; background: #f2f2ed; color: #090909; margin: 0 4px; }
+.pp-play:hover { background: #ffffff; }
+.pp-rate span { font-variant-numeric: tabular-nums; }
+.pp-time { margin-left: 8px; font-size: 12px; color: #f2f2ed; font-variant-numeric: tabular-nums; font-family: var(--font-mono); }
+.pp-time i { font-style: normal; color: #757573; margin: 0 2px; }
+
+/* the seek bar: buffered, played, a thumb that grows on hover, the time under the pointer */
+.pp-scrub { position: relative; height: 16px; display: flex; align-items: center; cursor: pointer; touch-action: none; }
+.pp-track { position: relative; width: 100%; height: 4px; border-radius: 4px; background: rgba(242,242,237,0.14); overflow: hidden;
+  transition: height 160ms var(--ease-out); }
+.pp-scrub:hover .pp-track, .pp-scrubbing .pp-track { height: 6px; }
+.pp-buffered { position: absolute; inset: 0 auto 0 0; background: rgba(242,242,237,0.22); }
+.pp-played { position: absolute; inset: 0 auto 0 0; background: #f2f2ed; }
+.pp-thumb { position: absolute; top: 50%; width: 12px; height: 12px; margin: -6px 0 0 -6px; border-radius: 50%; background: #fff;
+  box-shadow: 0 0 0 3px rgba(9,9,9,0.5); transform: scale(0); transition: transform 160ms var(--ease-out); }
+.pp-scrub:hover .pp-thumb, .pp-scrubbing .pp-thumb { transform: scale(1); }
+.pp-hover { position: absolute; bottom: 20px; transform: translateX(-50%); padding: 3px 7px; border-radius: 6px; pointer-events: none;
+  background: rgba(9,9,9,0.88); color: #f2f2ed; font-size: 11px; font-family: var(--font-mono); white-space: nowrap;
+  box-shadow: inset 0 0 0 1px rgba(242,242,237,0.12); }
+
+/* volume */
+.pp-vol { display: flex; align-items: center; }
+.pp-vol input { -webkit-appearance: none; appearance: none; width: 0; opacity: 0; height: 4px; border-radius: 4px; cursor: pointer;
+  background: linear-gradient(to right, #f2f2ed var(--v), rgba(242,242,237,0.18) var(--v));
+  transition: width 220ms var(--ease-out), opacity 220ms var(--ease-out), margin 220ms var(--ease-out); }
+.pp-vol:hover input, .pp-vol input:focus-visible { width: 84px; opacity: 1; margin: 0 8px 0 2px; }
+.pp-vol input::-webkit-slider-thumb { -webkit-appearance: none; width: 12px; height: 12px; border-radius: 50%; background: #fff; }
+
+/* the speed menu */
+.pp-menu { position: absolute; bottom: 38px; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; gap: 2px; padding: 5px;
+  border-radius: 10px; background: rgba(14,14,13,0.92); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
+  box-shadow: inset 0 0 0 1px rgba(242,242,237,0.12), 0 14px 30px -12px rgba(0,0,0,0.9); animation: pp-pop 160ms var(--ease-out) both; }
+.pp-menu button { min-width: 64px; height: 28px; border-radius: 7px; font-size: 12px; color: #f2f2ed; font-variant-numeric: tabular-nums; }
+.pp-menu button:hover:not(.pp-on) { background: rgba(242,242,237,0.09); }
+@keyframes pp-pop { from { opacity: 0; transform: translate(-50%, 6px) scale(0.96); } to { opacity: 1; transform: translate(-50%, 0); } }
+
+/* a key or click's effect, in the middle for a moment */
+.pp-flash { position: absolute; left: 50%; top: 50%; z-index: 4; display: flex; flex-direction: column; align-items: center; gap: 4px;
+  min-width: 76px; padding: 18px; border-radius: 50%; color: #f2f2ed; pointer-events: none;
+  background: rgba(9,9,9,0.55); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  animation: pp-flash 620ms var(--ease-out) both; }
+.pp-flash span { font-size: 11px; font-family: var(--font-mono); }
+@keyframes pp-flash { 0% { opacity: 0; transform: translate(-50%, -50%) scale(0.8); } 25% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  100% { opacity: 0; transform: translate(-50%, -50%) scale(1.15); } }
+
+.pp-toast { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); z-index: 6; display: flex; align-items: center; gap: 10px;
+  padding: 6px 8px 6px 12px; border-radius: 999px; font-size: 12px; color: #f2f2ed;
+  background: rgba(14,14,13,0.82); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+  box-shadow: inset 0 0 0 1px rgba(242,242,237,0.12); animation: pp-toast 220ms var(--ease-out) both; }
+.pp-toast button { padding: 3px 10px; border-radius: 999px; background: #f2f2ed; color: #090909; font-weight: 500; }
+@keyframes pp-toast { from { opacity: 0; transform: translate(-50%, -6px); } to { opacity: 1; transform: translate(-50%, 0); } }
+
+.pp-error { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px;
+  color: #b3b3ad; font-size: 13px; text-align: center; padding: 24px; }
+.pp-pill { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px; border-radius: 999px; color: #f2f2ed;
+  background: rgba(242,242,237,0.08); box-shadow: inset 0 0 0 1px rgba(242,242,237,0.12); font-size: 12px; }
+.pp-pill:hover { background: rgba(242,242,237,0.14); }
+
+@media (prefers-reduced-motion: reduce) {
+  .pp-controls, .pp-flash, .pp-toast, .pp-menu, .pp-thumb, .pp-track, .pp-vol input { transition: none !important; animation: none !important; }
+  .pp-spin, .pp-bars-on i { animation: none !important; }
+}
