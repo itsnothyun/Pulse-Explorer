@@ -1070,7 +1070,7 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
         if known.count == 1, let o = TrashBin.origin(of: known[0]) {
             back.title = String(localized: "Put Back to “\(o.deletingLastPathComponent().lastPathComponent)”")
         }
-        if known.isEmpty { back.toolTip = String(localized: "Moved to the Trash outside rustyfiles: Finder can put it back.") }
+        if known.isEmpty { back.toolTip = String(localized: "Moved to the Trash outside Pulse Explorer: Finder can put it back.") }
         b.add(String(localized: "Delete Immediately…"), "eraser") { [weak self] in self?.deleteImmediately(urls) }
         b.separator()
         b.add(String(localized: "Quick Look"), "eye", key: " ", mods: []) { [weak self] in self?.toggleQuickLook() }

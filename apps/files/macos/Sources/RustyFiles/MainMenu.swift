@@ -45,16 +45,16 @@ enum MainMenu {
     private typealias W = BrowserWindowController
 
     private static func appMenu() -> NSMenu {
-        let m = NSMenu(title: "rustyfiles")
-        m.addItem(item(String(localized: "About rustyfiles"), #selector(NSApplication.orderFrontStandardAboutPanel(_:))))
+        let m = NSMenu(title: "Pulse Explorer")
+        m.addItem(item(String(localized: "About Pulse Explorer"), #selector(NSApplication.orderFrontStandardAboutPanel(_:))))
         m.addItem(.separator())
         m.addItem(item(String(localized: "Settings…"), #selector(W.openSettings(_:)), ","))
         m.addItem(.separator())
-        m.addItem(item(String(localized: "Hide rustyfiles"), #selector(NSApplication.hide(_:)), "h"))
+        m.addItem(item(String(localized: "Hide Pulse Explorer"), #selector(NSApplication.hide(_:)), "h"))
         m.addItem(item(String(localized: "Hide Others"), #selector(NSApplication.hideOtherApplications(_:)), "h", [.command, .option]))
         m.addItem(item(String(localized: "Show All"), #selector(NSApplication.unhideAllApplications(_:))))
         m.addItem(.separator())
-        m.addItem(item(String(localized: "Quit rustyfiles"), #selector(NSApplication.terminate(_:)), "q"))
+        m.addItem(item(String(localized: "Quit Pulse Explorer"), #selector(NSApplication.terminate(_:)), "q"))
         return m
     }
 

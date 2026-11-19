@@ -360,11 +360,11 @@ fn reveal_in_explorer(path: String) -> Result<(), String> {
 
 /// The bundled file manager (apps/files, rustyfiles in Pulse colours). Installed next to the app as a resource;
 /// a dev build falls back to the release build in the workspace (`pnpm files:build`, `pnpm files:build:mac`).
-/// On macOS it is the native Mac rustyfiles (apps/files/macos), an app bundle inside ours.
+/// On macOS it is the native Mac file manager (apps/files/macos), staged as "Pulse Explorer.app" inside ours.
 #[cfg(not(target_os = "macos"))]
 const FILE_MANAGER: (&str, &str) = ("rustyfiles.exe", "../../files/target/release/rustyfiles.exe");
 #[cfg(target_os = "macos")]
-const FILE_MANAGER: (&str, &str) = ("rustyfiles.app", "../../files/macos/build/rustyfiles.app");
+const FILE_MANAGER: (&str, &str) = ("Pulse Explorer.app", "../../files/macos/build/Pulse Explorer.app");
 
 fn file_manager_exe(app: &AppHandle) -> Result<PathBuf, String> {
     let bundled = app

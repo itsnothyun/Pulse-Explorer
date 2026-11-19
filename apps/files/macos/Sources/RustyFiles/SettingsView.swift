@@ -86,7 +86,7 @@ enum SettingsContent {
             return [
                 .card(
                     title: String(localized: "Language"),
-                    detail: String(localized: "Takes effect when rustyfiles opens again."),
+                    detail: String(localized: "Takes effect when Pulse Explorer opens again."),
                     icon: "languages",
                     control: .choice(
                         options: [("system", String(localized: "System")), ("en", "English"), ("tr", "Türkçe")],
@@ -181,14 +181,12 @@ enum SettingsContent {
             let version = info?["CFBundleShortVersionString"] as? String ?? coreVersion()
             func open(_ s: String) -> () -> Void { { if let u = URL(string: s) { NSWorkspace.shared.open(u) } } }
             return [
-                .card(title: "rustyfiles", detail: String(localized: "A file manager that never freezes. Written in Rust."), icon: "info", control: .value(String(localized: "Version \(version)"))),
+                .card(title: "Pulse Explorer", detail: String(localized: "A file manager that never freezes. Written in Rust."), icon: "info", control: .value(String(localized: "Version \(version)"))),
                 .section(String(localized: "Community")),
                 .card(
                     title: String(localized: "Links"), detail: nil, icon: "globe",
                     control: .buttons([
-                        ("GitHub", open("https://github.com/gelenmedya/rustyfiles")),
-                        (String(localized: "Website"), open("https://rustyfiles.com")),
-                        ("Discord", open("https://discord.gg/K2banZ36zJ")),
+                        ("GitHub", open("https://github.com/itsnothyun/Pulse-Explorer")),
                     ])),
             ]
         }
@@ -202,7 +200,7 @@ extension SettingsContent {
         var rows: [SettingsRow] = [
             .section(String(localized: "Startup")),
             .card(
-                title: String(localized: "When rustyfiles starts"), detail: nil, icon: "power",
+                title: String(localized: "When Pulse Explorer starts"), detail: nil, icon: "power",
                 control: .choice(
                     options: [
                         ("resume", String(localized: "Continue where you left off")), ("home", String(localized: "Open a new tab")),
@@ -1160,7 +1158,7 @@ enum FerryPage {
         var rows: [SettingsRow] = [
             .card(
                 title: String(localized: "Use Ferry"),
-                detail: String(localized: "rustyfiles on the same network find each other; files go encrypted straight from device to device, with no server or account. When you turn it on, macOS may ask to let rustyfiles find devices on your local network: allow it."),
+                detail: String(localized: "Pulse Explorer on the same network find each other; files go encrypted straight from device to device, with no server or account. When you turn it on, macOS may ask to let Pulse Explorer find devices on your local network: allow it."),
                 icon: "send",
                 control: .toggle(get: { FerrySettings.enabled }, set: { FerrySettings.enabled = $0 })),
         ]
@@ -1199,7 +1197,7 @@ enum FerryPage {
         if svc.peers.isEmpty {
             rows.append(.card(
                 title: String(localized: "No devices yet"),
-                detail: String(localized: "rustyfiles must be open on the other device, with Ferry on. A device you haven’t paired with is listed only while its visibility is Everyone."),
+                detail: String(localized: "Pulse Explorer must be open on the other device, with Ferry on. A device you haven’t paired with is listed only while its visibility is Everyone."),
                 icon: "wifi", control: .none))
         }
         for peer in svc.peers {

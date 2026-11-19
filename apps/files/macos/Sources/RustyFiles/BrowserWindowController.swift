@@ -626,7 +626,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         case .NotFound:
             return String(localized: "“\(name)” can’t be found.")
         case .PermissionDenied:
-            return String(localized: "rustyfiles can’t open “\(name)” because it doesn’t have permission. You can give it access in System Settings › Privacy & Security › Full Disk Access.")
+            return String(localized: "Pulse Explorer can’t open “\(name)” because it doesn’t have permission. You can give it access in System Settings › Privacy & Security › Full Disk Access.")
         default:
             return String(localized: "“\(name)” can’t be opened: \(error.localizedDescription)")
         }

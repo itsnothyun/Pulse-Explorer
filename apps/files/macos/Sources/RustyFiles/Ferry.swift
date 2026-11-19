@@ -377,7 +377,7 @@ final class FerryService {
     // MARK: Local Network permission
 
     private static let localNetworkText = String(
-        localized: "rustyfiles may not use the local network. Allow it in System Settings › Privacy & Security › Local Network.")
+        localized: "Pulse Explorer may not use the local network. Allow it in System Settings › Privacy & Security › Local Network.")
 
     /// A refused Local Network permission drops multicast silently, which Rust can't see; a
     /// Bonjour browser for Ferry's own service is told (and is itself what asks the first time).

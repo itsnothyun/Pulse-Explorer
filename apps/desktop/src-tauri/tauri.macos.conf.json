@@ -2,7 +2,7 @@
   "$schema": "https://schema.tauri.app/config/2",
   "bundle": {
     "targets": ["app"],
-    "resources": ["files/rustyfiles.app/", "files/LICENSE"],
+    "resources": ["files/Pulse Explorer.app/", "files/LICENSE"],
     "macOS": {
       "minimumSystemVersion": "26.0"
     }

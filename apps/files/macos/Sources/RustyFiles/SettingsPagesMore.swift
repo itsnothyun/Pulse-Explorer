@@ -52,7 +52,7 @@ enum OpenRules {
     ]
 
     /// Pulse Explorer's app: `PULSE_VIEWER`, which it sets when it starts the file manager, else the app this one is
-    /// installed in (<Pulse Explorer.app>/Contents/Resources/files/rustyfiles.app).
+    /// installed in (<Pulse Explorer.app>/Contents/Resources/files/Pulse Explorer.app).
     static let pulseViewer: URL? = {
         let env = ProcessInfo.processInfo.environment["PULSE_VIEWER"].map(URL.init(fileURLWithPath:))
         var installed = Bundle.main.bundleURL
@@ -165,7 +165,7 @@ extension SettingsContent {
         return [
             .table(
                 title: String(localized: "Apps for kinds of files"),
-                detail: String(localized: "The first app of a list opens such files on a double click; all of them come first under “Open with”. Only rustyfiles follows these lists."),
+                detail: String(localized: "The first app of a list opens such files on a double click; all of them come first under “Open with”. Only Pulse Explorer follows these lists."),
                 icon: "file-type",
                 entries: rules.map { r in
                     let apps = r.apps.isEmpty ? String(localized: "No apps yet: add one.") : r.apps.map(OpenRules.appName).joined(separator: " · ")

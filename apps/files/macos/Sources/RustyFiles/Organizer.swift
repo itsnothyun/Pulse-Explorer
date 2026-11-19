@@ -546,7 +546,7 @@ extension SettingsContent {
         return [
             .card(
                 title: String(localized: "Run automatic rules"),
-                detail: String(localized: "Rules marked “Run by itself” sort new files as they arrive in their folders, while rustyfiles is open."), icon: "wand-sparkles",
+                detail: String(localized: "Rules marked “Run by itself” sort new files as they arrive in their folders, while Pulse Explorer is open."), icon: "wand-sparkles",
                 control: .toggle(get: { Organizer.autoOn }, set: { Organizer.autoOn = $0 })),
             .table(
                 title: String(localized: "Rules"),
