@@ -172,7 +172,14 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
         }
     }
 
-    @objc func togglePreviewPane(_ sender: Any?) { previewShown.toggle() }
+    @objc func togglePreviewPane(_ sender: Any?) {
+        let showing = !previewShown
+        Motion.animate(0.24) { [self] in
+            previewShown.toggle()
+            card.layoutSubtreeIfNeeded()
+        }
+        if showing { Motion.fadeIn(previewPane) }
+    }
 
     func showProperties() {
         guard archive == nil else { return }
@@ -1890,7 +1897,10 @@ final class ProgressCard {
         bar.doubleValue = card.total > 0 ? Double(card.done) / Double(card.total) * 100 : 0
         let f = window.frame
         p.setFrameOrigin(NSPoint(x: f.maxX - p.frame.width - 20, y: f.minY + 20))
-        if !p.isVisible { p.orderFront(nil) }
+        if !p.isVisible {
+            p.orderFront(nil)
+            Motion.present(p)
+        }
         if p.parent == nil { window.addChildWindow(p, ordered: .above) }
     }
 

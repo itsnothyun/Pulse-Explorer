@@ -285,6 +285,7 @@ final class RuleEditor: NSObject, NSWindowDelegate {
     static func edit(_ r: inout Organizer.Rule, isNew: Bool) -> Organizer.Rule? {
         let e = RuleEditor(r)
         e.panel.delegate = e
+        e.panel.animationBehavior = Motion.on ? .alertPanel : .none
         e.panel.title = isNew ? String(localized: "New rule") : String(localized: "Edit rule")
         e.build()
         NSApp.runModal(for: e.panel)

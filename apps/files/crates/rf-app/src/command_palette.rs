@@ -310,6 +310,8 @@ impl Render for CommandPalette {
                         d.child(div().p_3().text_sm().text_color(p.text_secondary).child(crate::t!("Eşleşen komut yok")))
                     }),
             )
+            // the scrim and the card fade in (Pulse motion)
+            .with_animation("palette-in", Animation::new(std::time::Duration::from_millis(if crate::settings::animations() { 160 } else { 1 })).with_easing(ease_out_quint()), |el, t| el.opacity(t))
     }
 }
 

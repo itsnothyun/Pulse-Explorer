@@ -55,7 +55,7 @@ final class HomeView: FlippedView {
             HomeTile(kind: .drive(icon: v.icon, used: v.used, detail: v.detail), title: v.title, url: v.url) { [weak self] in self?.onOpenFolder?(v.url) }
         }
         tagTiles = !AppSettings.showsHome(.tags) ? [] : TagStore.all.map { t in
-            HomeTile(kind: .folder(icon: "tag"), title: t.name, url: TagStore.url(t.name)) { [weak self] in self?.onOpenFolder?(TagStore.url(t.name)) }
+            HomeTile(kind: .tag(color: TagStore.color(t.color)), title: t.name, url: TagStore.url(t.name)) { [weak self] in self?.onOpenFolder?(TagStore.url(t.name)) }
         }
         headers.append(HomeHeader(String(localized: "Quick access")))
         headers.append(HomeHeader(String(localized: "Drives")))
@@ -229,12 +229,13 @@ final class HomeView: FlippedView {
         if !tagTiles.isEmpty {
             y += 8 + 16
             header(2)
-            grid(tagTiles, min: 140, max: 220, height: 56)
+            grid(tagTiles, min: 140, max: 220, height: 48)
         }
         if let i = headers.firstIndex(where: \.isRecent) {
             y += 8 + 16
             header(i)
-            let hw = min(avail, 900)
+            // as wide as the grids above it, so "Clear" lines up with their right edge
+            let hw = avail
             let cw = clear.intrinsicContentSize.width
             clear.frame = NSRect(x: 24 + hw - cw, y: headers[i].frame.minY - 2, width: cw, height: 24)
             for r in recent {
@@ -282,6 +283,8 @@ final class HomeTile: HoverView {
     enum Kind {
         case folder(icon: String)
         case drive(icon: String, used: Double?, detail: String)
+        /// A tag: its colour on the tag icon, a wash of it on the card (none: the plain card).
+        case tag(color: NSColor?)
     }
 
     let kind: Kind
@@ -310,13 +313,24 @@ final class HomeTile: HoverView {
         let path = NSBezierPath(roundedRect: r, xRadius: Metrics.radius, yRadius: Metrics.radius)
         (hovered ? p.tileHover : p.tileBg).setFill()
         path.fill()
-        p.border.setStroke()
+        if case .tag(let color?) = kind {
+            color.withAlphaComponent(hovered ? 0.18 : 0.11).setFill()
+            path.fill()
+            color.withAlphaComponent(0.38).setStroke()
+        } else {
+            p.border.setStroke()
+        }
         path.stroke()
         let inner = bounds.insetBy(dx: 12, dy: 12)
         switch kind {
         case .folder(let icon):
             Draw.icon(icon, in: NSRect(x: inner.minX, y: inner.minY, width: 28, height: 28), size: 28, color: p.accent)
             Draw.text(title, in: NSRect(x: inner.minX, y: inner.minY + 28 + 8, width: inner.width, height: 20), font: Metrics.textSm, color: p.text)
+        case .tag(let color):
+            // one row: the coloured tag, then the name, centred in the card
+            let ic = NSRect(x: inner.minX, y: (bounds.height - 18) / 2, width: 18, height: 18)
+            Draw.icon("tag", in: ic, size: 18, color: color ?? p.textSecondary)
+            Draw.text(title, in: NSRect(x: ic.maxX + 10, y: (bounds.height - 20) / 2, width: inner.maxX - ic.maxX - 10, height: 20), font: Metrics.textSm, color: p.text)
         case .drive(let icon, let used, let detail):
             Draw.icon(icon, in: NSRect(x: inner.minX, y: inner.minY, width: 28, height: inner.height), size: 28, color: p.textSecondary)
             let x = inner.minX + 28 + 12

@@ -67,6 +67,8 @@ final class PropertiesWindow: NSWindowController, NSWindowDelegate {
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
         window.titlebarAppearsTransparent = true
         window.minSize = NSSize(width: 400, height: 360)
+        // grows in as a document window does (Motion)
+        window.animationBehavior = Motion.on ? .documentWindow : .none
         window.title = single
             ? String(localized: "\(FileManager.default.displayName(atPath: urls[0].path)) Properties")
             : String(localized: "\(urls.count) items Properties")

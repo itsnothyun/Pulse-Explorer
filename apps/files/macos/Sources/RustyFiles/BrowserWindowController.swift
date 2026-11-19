@@ -126,6 +126,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         window.contentView = frame
         applyMaterial()
         [sidebar, handle, list.card, navBar, titleBar].forEach(root.addSubview)
+        sidebar.isHidden = !sidebarShown
         root.onLayout = { [weak self] in self?.layoutRoot() }
 
         window.center()
@@ -156,9 +157,12 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         navBar.frame = NSRect(x: 0, y: Metrics.titleBarHeight, width: b.width, height: Metrics.navRowHeight)
         let top = Metrics.titleBarHeight + Metrics.navRowHeight
         let sw = sidebarShown ? sidebarWidth : 0
-        sidebar.isHidden = !sidebarShown
+        // while it slides away the sidebar stays in the view, going narrower and fading (toggleSidebar hides it after)
+        if sidebarShown { sidebar.isHidden = false }
         handle.isHidden = !sidebarShown
-        sidebar.frame = NSRect(x: 0, y: top, width: sw, height: b.height - top)
+        sidebar.alphaValue = sidebarShown ? 1 : 0
+        sidebar.frame = NSRect(x: 0, y: top, width: sidebarShown ? sw : sidebarWidth, height: b.height - top)
+        if !sidebarShown { sidebar.frame.origin.x = -sidebarWidth * 0.25 }
         handle.frame = NSRect(x: sw - 3, y: top, width: 6, height: b.height - top)
         // no sidebar: the card keeps the 8 px margin on the left too
         let left = sidebarShown ? sw : 8
@@ -315,13 +319,22 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         refreshTabs()
     }
 
+    /// What the card showed last (a tab, a page or a folder), so a change of it cross-fades and a refresh does not.
+    private var shownKey: (ObjectIdentifier, URL)?
+
     private func showTab() {
+        let key = (ObjectIdentifier(tab), tab.url)
+        if let k = shownKey, k.0 != key.0 || k.1 != key.1 { Motion.crossFade(list.card) }
+        shownKey = key
         // only the active tab's page shows; the card stays under it
         for t in tabs where t !== tab { t.page?.container.isHidden = true }
         if tab.isWeb {
             let page = webPage(for: tab)
             page.container.frame = list.card.frame
-            page.container.isHidden = false
+            if page.container.isHidden || page.container.alphaValue < 1 {
+                page.container.isHidden = false
+                Motion.fadeIn(page.container)
+            }
             watch()
             updateChrome()
             window?.makeFirstResponder(page.view)
@@ -836,7 +849,19 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     @objc func toggleSidebar(_ sender: Any?) {
         sidebarShown.toggle()
         UserDefaults.standard.set(!sidebarShown, forKey: "sidebarHidden")
-        root.needsLayout = true
+        let shown = sidebarShown
+        if shown {
+            // it comes in from a little to the left, faded, at its full width
+            sidebar.isHidden = false
+            sidebar.alphaValue = 0
+        }
+        Motion.animate(0.26, { [self] in
+            layoutRoot()
+            root.layoutSubtreeIfNeeded()
+        }, completion: { [weak self] in
+            guard let self, !self.sidebarShown, !shown else { return }
+            self.sidebar.isHidden = true
+        })
     }
 
     // MARK: browser tabs (WebTabs.swift)
