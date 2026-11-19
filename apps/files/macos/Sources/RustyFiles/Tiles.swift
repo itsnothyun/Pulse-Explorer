@@ -151,6 +151,12 @@ final class TileCollectionView: NSCollectionView, NSServicesMenuRequestor {
         }
     }
 
+    /// Pulse's right-click menu (PulseMenu): the same menu, opening with motion.
+    override func rightMouseDown(with event: NSEvent) {
+        guard Motion.on, let m = menu(for: event) else { return super.rightMouseDown(with: event) }
+        PulseMenu.show(m, for: event, in: self)
+    }
+
     override func menu(for event: NSEvent) -> NSMenu? {
         let at = indexPathForItem(at: convert(event.locationInWindow, from: nil))
         if let at, !selectionIndexPaths.contains(at) {

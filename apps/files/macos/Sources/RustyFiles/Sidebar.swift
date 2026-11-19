@@ -357,6 +357,12 @@ final class SidebarListView: HoverView {
     /// sidebar menu (workspace.rs): open here / in a new tab / in a new window, pin or unpin,
     /// copy the path, Terminal; a drive that can be ejected also offers Eject. Home, Trash and
     /// Settings have none, as on Windows.
+    /// Pulse's right-click menu (PulseMenu): the same menu, opening with motion.
+    override func rightMouseDown(with event: NSEvent) {
+        guard Motion.on, let m = menu(for: event) else { return super.rightMouseDown(with: event) }
+        PulseMenu.show(m, for: event, in: self)
+    }
+
     override func menu(for event: NSEvent) -> NSMenu? {
         guard let i = index(at: convert(event.locationInWindow, from: nil)), let url = items[i].url, url.isFileURL,
             items[i].kind != .trash, let owner

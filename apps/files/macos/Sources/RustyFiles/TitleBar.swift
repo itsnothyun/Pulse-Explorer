@@ -113,6 +113,12 @@ final class TabStripView: HoverView {
         pressedClose = nil
     }
 
+    /// Pulse's right-click menu (PulseMenu): the same menu, opening with motion.
+    override func rightMouseDown(with event: NSEvent) {
+        guard Motion.on, let m = menu(for: event) else { return super.rightMouseDown(with: event) }
+        PulseMenu.show(m, for: event, in: self)
+    }
+
     override func menu(for event: NSEvent) -> NSMenu? {
         guard let i = tab(at: convert(event.locationInWindow, from: nil)) else { return nil }
         return menuFor?(i)

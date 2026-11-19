@@ -147,6 +147,12 @@ class HoverView: FlippedView {
 /// buttons (28×28) and the dropdowns (label + chevron).
 @MainActor
 final class IconButton: HoverView {
+    /// Pulse's right-click menu (PulseMenu): the same menu, opening with motion.
+    override func rightMouseDown(with event: NSEvent) {
+        guard Motion.on, let m = menu(for: event) else { return super.rightMouseDown(with: event) }
+        PulseMenu.show(m, for: event, in: self)
+    }
+
     override func menu(for event: NSEvent) -> NSMenu? { menuProvider?() ?? super.menu(for: event) }
 
     var icon: String { didSet { needsDisplay = true } }

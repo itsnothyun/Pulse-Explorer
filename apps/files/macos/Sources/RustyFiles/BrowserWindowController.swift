@@ -786,7 +786,12 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     func demoMenu(item: Bool) {
         if item { list.table.selectRowIndexes([0], byExtendingSelection: false) } else { list.table.deselectAll(nil) }
         let menu = list.contextMenu()
-        menu.popUp(positioning: nil, at: NSPoint(x: 300, y: item ? 20 : 200), in: list.table)
+        let at = NSPoint(x: 300, y: item ? 20 : 200)
+        if Motion.on, let w = list.table.window {
+            PulseMenu.show(menu, for: nil, in: list.table, at: w.convertPoint(toScreen: list.table.convert(at, to: nil)))
+        } else {
+            menu.popUp(positioning: nil, at: at, in: list.table)
+        }
     }
 
     func openSettings(page: SettingsPage) {

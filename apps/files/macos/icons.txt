@@ -108,3 +108,5 @@ bell
 square-check
 mouse-pointer
 wand-sparkles
+check
+ellipsis
