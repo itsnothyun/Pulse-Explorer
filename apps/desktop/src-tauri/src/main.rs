@@ -73,6 +73,148 @@ fn read_local_file_bytes(path: String) -> Result<Response, String> {
         .map_err(|err| format!("Failed to read file {}: {}", path, err))
 }
 
+/// A name for a new file next to another: one plain file name, nothing that could reach another folder.
+fn validate_save_name(name: &str) -> Result<(), String> {
+    let bad = name.is_empty()
+        || name.len() > 255
+        || name == "."
+        || name.contains("..")
+        || name.chars().any(|c| matches!(c, '/' | '\\' | ':' | '<' | '>' | '"' | '|' | '?' | '*') || c.is_control())
+        || name.trim() != name
+        || name.ends_with('.');
+    if bad {
+        Err(format!("Not a valid file name: {name}"))
+    } else {
+        Ok(())
+    }
+}
+
+/// The n-th name tried for `name`: `a.png`, then `a 2.png`, `a 3.png`… (the number goes before the extension).
+fn numbered_name(name: &str, n: u32) -> String {
+    if n <= 1 {
+        return name.to_string();
+    }
+    match name.rfind('.') {
+        Some(i) if i > 0 => format!("{} {n}{}", &name[..i], &name[i..]),
+        _ => format!("{name} {n}"),
+    }
+}
+
+/// `%XX` decoding for the header values `save_next_to` takes (headers are ASCII; paths are not).
+fn percent_decode(s: &str) -> Result<String, String> {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            let hex = s.get(i + 1..i + 3).ok_or("Bad percent-encoding")?;
+            out.push(u8::from_str_radix(hex, 16).map_err(|_| "Bad percent-encoding")?);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).map_err(|_| "Header is not UTF-8".to_string())
+}
+
+/// Writes `bytes` as a new file named `name` in `source`'s own folder. Never overwrites: if the name is taken it
+/// tries `name 2`, `name 3`… (create_new, so a file appearing meanwhile is not clobbered). Returns the final path.
+fn write_next_to(source: &std::path::Path, name: &str, bytes: &[u8]) -> Result<PathBuf, String> {
+    use std::io::Write;
+    validate_save_name(name)?;
+    if !source.is_file() {
+        return Err(format!("{} no longer exists", source.display()));
+    }
+    let folder = source.parent().ok_or("The file has no folder")?;
+    for n in 1..=9999 {
+        let target = folder.join(numbered_name(name, n));
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&target) {
+            Ok(mut f) => {
+                if let Err(err) = f.write_all(bytes).and_then(|_| f.sync_all()) {
+                    drop(f);
+                    let _ = std::fs::remove_file(&target);
+                    return Err(format!("Could not write {}: {err}", target.display()));
+                }
+                return Ok(target);
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(err) => return Err(format!("Could not create {}: {err}", target.display())),
+        }
+    }
+    Err(format!("No free name for {name}"))
+}
+
+/// Saves bytes from the web side (a frame or a clip from the player) next to the file they came from. The bytes are
+/// the raw IPC body (no JSON number array); the source path and the name come as percent-encoded headers
+/// `x-source` and `x-name`. Returns the path written.
+#[tauri::command]
+fn save_next_to(request: tauri::ipc::Request<'_>) -> Result<String, String> {
+    let header = |key: &str| -> Result<String, String> {
+        let raw = request.headers().get(key).ok_or(format!("Missing {key}"))?;
+        percent_decode(raw.to_str().map_err(|_| format!("Bad {key}"))?)
+    };
+    let source = header("x-source")?;
+    let name = header("x-name")?;
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err("Expected raw bytes".into());
+    };
+    write_next_to(std::path::Path::new(&source), &name, bytes).map(|p| p.to_string_lossy().to_string())
+}
+
+#[cfg(test)]
+mod save_next_to_tests {
+    use super::*;
+
+    #[test]
+    fn rejects_names_that_leave_the_folder() {
+        for bad in ["", ".", "..", "../x.png", "a/b.png", "a\\b.png", "x..png", "C:x.png", "a\0.png", " a.png", "a.png ", "a."] {
+            assert!(validate_save_name(bad).is_err(), "{bad:?} should be rejected");
+        }
+        for good in ["clip frame 0m12s.png", "My video clip 0m10s-0m25s.mp4", "été.gif"] {
+            assert!(validate_save_name(good).is_ok(), "{good:?} should be accepted");
+        }
+    }
+
+    #[test]
+    fn numbers_go_before_the_extension() {
+        assert_eq!(numbered_name("a.png", 1), "a.png");
+        assert_eq!(numbered_name("a.png", 2), "a 2.png");
+        assert_eq!(numbered_name("a b.c.mp4", 3), "a b.c 3.mp4");
+        assert_eq!(numbered_name("noext", 2), "noext 2");
+        assert_eq!(numbered_name(".hidden", 2), ".hidden 2");
+    }
+
+    #[test]
+    fn decodes_percent_headers() {
+        assert_eq!(percent_decode("%2FUsers%2Fme%2F%C3%A9t%C3%A9%20x.mp4").unwrap(), "/Users/me/été x.mp4");
+        assert!(percent_decode("%zz").is_err());
+        assert!(percent_decode("%2").is_err());
+    }
+
+    #[test]
+    fn writes_next_to_the_source_without_overwriting() {
+        let dir = std::env::temp_dir().join(format!("pulse-save-next-to-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let source = dir.join("movie.mp4");
+        std::fs::write(&source, b"src").unwrap();
+
+        let first = write_next_to(&source, "movie frame 0m12s.png", b"one").unwrap();
+        let second = write_next_to(&source, "movie frame 0m12s.png", b"two").unwrap();
+        let third = write_next_to(&source, "movie frame 0m12s.png", b"three").unwrap();
+        assert_eq!(first, dir.join("movie frame 0m12s.png"));
+        assert_eq!(second, dir.join("movie frame 0m12s 2.png"));
+        assert_eq!(third, dir.join("movie frame 0m12s 3.png"));
+        assert_eq!(std::fs::read(&first).unwrap(), b"one");
+        assert_eq!(std::fs::read(&second).unwrap(), b"two");
+
+        assert!(write_next_to(&source, "../escape.png", b"x").is_err());
+        assert!(write_next_to(&dir.join("gone.mp4"), "a.png", b"x").is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
 /// File types Pulse can open; Explorer history is filtered to these.
 const SUPPORTED_EXTENSIONS: &[&str] = &[
     "pdf", "docx", "doc", "odt", "rtf", "pptx", "ppt", "odp", "xlsx", "xls", "ods", "csv", "tsv",
@@ -790,7 +932,8 @@ fn main() {
             close_quickview,
             reveal_in_explorer,
             open_with_other_app,
-            open_file_manager
+            open_file_manager,
+            save_next_to
         ])
         .setup(move |app| {
             // Pulse Explorer has no window of its own any more: the file manager is the app and Quick View

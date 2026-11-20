@@ -13,9 +13,12 @@ let package = Package(
     targets: [
         // The C header UniFFI generates for the Rust core (copied in by build.sh).
         .target(name: "rf_macFFI", path: "Sources/rf_macFFI"),
+        // Pulse's features as plain, testable logic (no windows): naming, scanning, parsing, storage, text recognition.
+        .target(name: "PulseKit", path: "Sources/PulseKit"),
+        .testTarget(name: "PulseKitTests", dependencies: ["PulseKit"], path: "Tests/PulseKitTests"),
         .executableTarget(
             name: "RustyFiles",
-            dependencies: ["rf_macFFI"],
+            dependencies: ["rf_macFFI", "PulseKit"],
             path: "Sources/RustyFiles",
             linkerSettings: [
                 // The static library by full path, so the linker never picks the .dylib next to it.

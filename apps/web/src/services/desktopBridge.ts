@@ -211,3 +211,16 @@ export function startWindowDrag(e: React.MouseEvent, maximizeOnDoubleClick = tru
     else void win.startDragging();
   });
 }
+
+/**
+ * Saves bytes (a frame or a clip from the player) as a new file in the same folder as `sourcePath`. The shell never
+ * overwrites: a taken name becomes `name 2.ext`, `name 3.ext`…, and the path actually written is returned. The
+ * bytes travel as the raw IPC body, not as JSON. Null in the browser build, where there is no folder to save into.
+ */
+export async function saveNextTo(sourcePath: string, name: string, bytes: Uint8Array): Promise<string | null> {
+  if (!isDesktop()) return null;
+  const { invoke } = await import('@tauri-apps/api/core');
+  return invoke<string>('save_next_to', bytes, {
+    headers: { 'x-source': encodeURIComponent(sourcePath), 'x-name': encodeURIComponent(name) },
+  });
+}

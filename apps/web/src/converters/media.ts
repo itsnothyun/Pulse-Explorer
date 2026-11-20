@@ -56,6 +56,71 @@ function codecArgs(outExt: string, level: Level, hasVideo: boolean): string[] {
   }
 }
 
+export interface MediaJob {
+  /** The source, mounted read-only (WORKERFS): FFmpeg reads only the parts it seeks to, outside the wasm heap. */
+  input: Blob;
+  inputExt: string;
+  outputExt: string;
+  /** FFmpeg arguments, given the input and output paths inside the engine. */
+  args: (input: string, output: string) => string[];
+  /** Every log line (the player reads `time=` from them for progress). */
+  onLog?: (line: string) => void;
+  /** Aborting stops the engine at once (its worker is terminated and restarted on the next job). */
+  signal?: AbortSignal;
+}
+
+let jobSeq = 0;
+
+/**
+ * One FFmpeg run over a Blob for callers outside the converter registry (the player's frame and clip export).
+ * Resolves with the output's bytes; rejects with a ConvertError on failure, or a DOMException `AbortError` when
+ * `signal` aborts.
+ */
+export async function runMediaJob(job: MediaJob): Promise<Uint8Array> {
+  const aborted = () => new DOMException('Cancelled', 'AbortError');
+  if (job.signal?.aborted) throw aborted();
+  const ff = await loadFfmpeg();
+  const dir = `/job${++jobSeq}`;
+  const inPath = `${dir}/in.${job.inputExt.toLowerCase() || 'bin'}`;
+  const outPath = `/out${jobSeq}.${job.outputExt}`;
+  let killed = false;
+  const kill = () => {
+    killed = true;
+    ff.terminate();
+    ffmpegPromise = null;
+  };
+  let lastLine = '';
+  const log = ({ message }: { message: string }) => {
+    if (message.trim() && !/^\s*(frame|size)=/.test(message)) lastLine = message.trim();
+    job.onLog?.(message);
+  };
+  if (job.signal?.aborted) throw aborted();
+  job.signal?.addEventListener('abort', kill, { once: true });
+  ff.on('log', log);
+  let mounted = false;
+  try {
+    await ff.createDir(dir);
+    await ff.mount('WORKERFS' as import('@ffmpeg/ffmpeg').FFFSType, { blobs: [{ name: inPath.slice(dir.length + 1), data: job.input }] }, dir);
+    mounted = true;
+    const code = await ff.exec(job.args(inPath, outPath));
+    if (code !== 0) throw new ConvertError(`The media engine could not process this file${lastLine ? ` (${lastLine.slice(0, 140)})` : ''}.`);
+    const data = (await ff.readFile(outPath)) as Uint8Array;
+    if (data.length === 0) throw new ConvertError('The export produced an empty file.');
+    return data.slice();
+  } catch (e) {
+    if (killed) throw aborted();
+    throw e instanceof ConvertError ? e : new ConvertError(`The media engine failed: ${e instanceof Error ? e.message : String(e)}`);
+  } finally {
+    job.signal?.removeEventListener('abort', kill);
+    if (!killed) {
+      ff.off('log', log);
+      await ff.deleteFile(outPath).catch(() => undefined);
+      if (mounted) await ff.unmount(dir).catch(() => undefined);
+      await ff.deleteDir(dir).catch(() => undefined);
+    }
+  }
+}
+
 export const mediaConverter: Converter = {
   id: 'media',
 

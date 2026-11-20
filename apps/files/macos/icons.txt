@@ -118,3 +118,7 @@ folder-git-2
 command
 corner-down-right
 clock
+scan-text
+play
+inbox
+sticky-note

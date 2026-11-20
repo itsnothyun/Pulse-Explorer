@@ -1,4 +1,5 @@
 import AppKit
+import PulseKit
 
 /// One tab: its folder, its own back/forward history, and what to restore when it comes back.
 @MainActor
@@ -42,6 +43,7 @@ final class BrowserTab {
         }
         if let tag = tagName { return TabInfo(title: tag, icon: "tag") }
         if let s = search { return TabInfo(title: "“\(s.query)”", icon: "search") }
+        if TodayPlace.parse(url) != nil { return TabInfo(title: String(localized: "Changed today"), icon: "clock") }
         let fm = FileManager.default
         let home = fm.homeDirectoryForCurrentUser.standardizedFileURL
         if url == home { return TabInfo(title: fm.displayName(atPath: url.path), icon: "house") }
@@ -526,7 +528,9 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
             }
             let began = Date()
             let result: Result<Folder, Error>
-            if let s = SearchPlace.parse(url) {
+            if let today = TodayPlace.parse(url) {
+                result = .success(Folder.gathered(label: url.absoluteString, paths: TodayPlace.paths(today), column: column, ascending: ascending, foldersFirst: first, showHidden: hidden))
+            } else if let s = SearchPlace.parse(url) {
                 let paths = SearchPlace.run(s.dir, s.query)
                 result = .success(Folder.gathered(label: url.absoluteString, paths: paths, column: column, ascending: ascending, foldersFirst: first, showHidden: hidden))
             } else if let tag = TagStore.name(of: url) {
@@ -673,6 +677,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
             navBar.omnibar.breadcrumb.segments = [BreadcrumbView.Segment(title: String(localized: "Settings"), url: BrowserTab.settingsURL)]
         } else if tab.isHome {
             navBar.omnibar.breadcrumb.segments = [BreadcrumbView.Segment(title: String(localized: "Home"), url: BrowserTab.homeURL)]
+        } else if let dir = TodayPlace.parse(tab.url) {
+            navBar.omnibar.breadcrumb.segments = BreadcrumbView.segments(for: dir) + [BreadcrumbView.Segment(title: String(localized: "Changed today"), url: tab.url)]
         } else if let s = tab.search {
             navBar.omnibar.breadcrumb.segments = BreadcrumbView.segments(for: s.dir)
                 + [BreadcrumbView.Segment(title: String(localized: "Search “\(s.query)”"), url: tab.url)]
@@ -760,6 +766,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         if tab.isHome || tab.isWeb { return }
         if tab.tagName != nil { return goHome(sender) }
         if let s = tab.search { return navigate(to: s.dir) }
+        if let dir = TodayPlace.parse(tab.url) { return navigate(to: dir) }
         let parent = tab.url.deletingLastPathComponent()
         guard parent.path != tab.url.path else { return }
         navigate(to: parent, selecting: AppSettings.upSelectsPrevious ? tab.url.lastPathComponent : nil)
@@ -856,7 +863,23 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     @objc func newFolder(_ sender: Any?) { list.newFolder() }
     @objc func cut(_ sender: Any?) { list.cutItems() }
     @objc func copy(_ sender: Any?) { list.copyItems() }
-    @objc func paste(_ sender: Any?) { list.pasteItems() }
+    /// ⌘V: files copied are pasted as themselves; otherwise a picture, PDF, link or text on the clipboard becomes a file.
+    @objc func paste(_ sender: Any?) {
+        if Clipboard.hasFiles { return list.pasteItems() }
+        if let dir = list.url, dir.isFileURL, list.archiveIsNil { PasteAsFile.paste(into: dir, list: list) }
+    }
+
+    // Pulse's tools (PulseFeatures.swift, PulseWindows.swift)
+    @objc func saveWorkspace(_ sender: Any?) { WorkspaceActions.saveCurrent(self) }
+    @objc func toggleShelf(_ sender: Any?) { ShelfPanel.shared.toggle() }
+    @objc func findSpace(_ sender: Any?) {
+        guard tab.url.isFileURL, !tab.isWeb else { return NSSound.beep() }
+        DiskLensWindow.show(tab.url)
+    }
+    @objc func changedToday(_ sender: Any?) {
+        let dir = TodayPlace.parse(tab.url) ?? (tab.url.isFileURL && !tab.isWeb ? tab.url : FileManager.default.homeDirectoryForCurrentUser)
+        navigate(to: TodayPlace.url(in: dir))
+    }
     @objc func rename(_ sender: Any?) { list.beginRename() }
     @objc func moveToTrash(_ sender: Any?) { list.trashSelected() }
     @objc func toggleQuickLook(_ sender: Any?) { list.toggleQuickLook() }
@@ -933,7 +956,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
             #selector(toggleQuickLook(_:)):
             return selected
         case #selector(rename(_:)): return !list.selectedNames.isEmpty
-        case #selector(paste(_:)): return Clipboard.hasFiles && list.folder != nil
+        case #selector(paste(_:)): return list.folder != nil && (Clipboard.hasFiles || (list.url?.isFileURL == true && PasteAsFile.available))
         case #selector(newFolder(_:)): return list.folder != nil
         case #selector(selectNextTab(_:)), #selector(selectPreviousTab(_:)): return tabs.count > 1
         case #selector(reopenClosedTab(_:)): return !closedTabs.isEmpty

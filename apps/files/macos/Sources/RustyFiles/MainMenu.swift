@@ -73,6 +73,11 @@ enum MainMenu {
         m.addItem(item(String(localized: "Close Tab"), #selector(W.closeTab(_:)), "w"))
         m.addItem(item(String(localized: "Reopen Closed Tab"), #selector(W.reopenClosedTab(_:)), "t", [.command, .shift]))
         m.addItem(item(String(localized: "Close Window"), #selector(NSWindow.performClose(_:)), "w", [.command, .shift]))
+        m.addItem(.separator())
+        m.addItem(item(String(localized: "Save Tabs as Workspace…"), #selector(W.saveWorkspace(_:)), "s", [.command, .option]))
+        let open = NSMenuItem(title: String(localized: "Open Workspace"), action: nil, keyEquivalent: "")
+        open.submenu = WorkspaceActions.menu()
+        m.addItem(open)
         return m
     }
 
@@ -125,6 +130,9 @@ enum MainMenu {
         m.addItem(item(String(localized: "Documents"), #selector(W.goDocuments(_:)), "o", [.command, .shift]))
         m.addItem(item(String(localized: "Downloads"), #selector(W.goDownloads(_:)), "l", [.command, .option]))
         m.addItem(item(String(localized: "Applications"), #selector(W.goApplications(_:)), "a", [.command, .shift]))
+        m.addItem(.separator())
+        m.addItem(item(String(localized: "Changed Today"), #selector(W.changedToday(_:)), "y", [.command, .shift]))
+        m.addItem(item(String(localized: "What’s Taking Space…"), #selector(W.findSpace(_:)), "u", [.command, .shift]))
         return m
     }
 
@@ -132,6 +140,8 @@ enum MainMenu {
         let m = NSMenu(title: String(localized: "Window"))
         m.addItem(item(String(localized: "Minimize"), #selector(NSWindow.performMiniaturize(_:)), "m"))
         m.addItem(item(String(localized: "Zoom"), #selector(NSWindow.performZoom(_:))))
+        m.addItem(.separator())
+        m.addItem(item(String(localized: "Shelf"), #selector(W.toggleShelf(_:)), "j", [.command, .shift]))
         m.addItem(.separator())
         m.addItem(item(String(localized: "Next Tab"), #selector(W.selectNextTab(_:)), "\t", .control))
         m.addItem(item(String(localized: "Previous Tab"), #selector(W.selectPreviousTab(_:)), "\t", [.control, .shift]))

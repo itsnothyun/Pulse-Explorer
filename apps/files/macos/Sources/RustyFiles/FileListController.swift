@@ -1,4 +1,5 @@
 import AppKit
+import PulseKit
 import Quartz
 
 /// Details (the table) or the grid's Tiles.
@@ -136,7 +137,12 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
         message.isHidden = true
         if card.subviews.contains(privacyButton) { privacyButton.isHidden = true }
 
-        [commandBar, header, scroll, tileScroll, status, message, previewPane, previewHandle].forEach(card.addSubview)
+        [commandBar, header, scroll, tileScroll, status, message, previewPane, previewHandle, noteBanner].forEach(card.addSubview)
+        noteBanner.isHidden = true
+        noteBanner.onEdit = { [weak self] in
+            guard let self, let dir = self.url else { return }
+            NoteEditor.edit(dir, in: self.card.window) { self.refreshNote() }
+        }
         previewHandle.currentWidth = { [weak self] in self?.previewWidth ?? PreviewPane.defaultWidth }
         previewHandle.onDrag = { [weak self] w in
             self?.previewWidth = w
@@ -217,16 +223,19 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
             previewHandle.frame = NSRect(x: b.width - pw - 3, y: barH, width: 6, height: b.height - barH)
         }
         commandBar.frame = NSRect(x: 0, y: 0, width: b.width, height: Metrics.commandBarHeight)
+        // the folder's note, between the command bar and the list (PulseFeatures.swift)
+        let noteH: CGFloat = noteBanner.isHidden ? 0 : NoteBanner.height
+        noteBanner.frame = NSRect(x: 0, y: barH, width: b.width - (previewShown && !AppSettings.previewAtBottom && !previewPane.isHidden ? (previewPane.frame.width) : 0), height: NoteBanner.height)
         if paneShown && !bottom { b.size.width -= pw }
         if paneShown && bottom {
             previewPane.frame = NSRect(x: 0, y: b.height - ph, width: b.width, height: ph)
             b.size.height -= ph
         }
-        header.frame = NSRect(x: 0, y: barH, width: b.width, height: Metrics.headerHeight)
-        let top = barH + Metrics.headerHeight
+        header.frame = NSRect(x: 0, y: barH + noteH, width: b.width, height: Metrics.headerHeight)
+        let top = barH + noteH + Metrics.headerHeight
         status.frame = NSRect(x: 0, y: b.height - statusH, width: b.width, height: Metrics.statusBarHeight)
         scroll.frame = NSRect(x: 0, y: top, width: b.width, height: b.height - statusH - top)
-        tileScroll.frame = NSRect(x: 0, y: barH, width: b.width, height: b.height - statusH - barH)
+        tileScroll.frame = NSRect(x: 0, y: barH + noteH, width: b.width, height: b.height - statusH - barH - noteH)
         // as many columns as fit, left-aligned with 4 between them (not spread out)
         let cols = max(Int((b.width - 2 * TileMetrics.padX + TileMetrics.gap) / (TileMetrics.width + TileMetrics.gap)), 1)
         let used = CGFloat(cols) * (TileMetrics.width + TileMetrics.gap) - TileMetrics.gap
@@ -344,6 +353,24 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
 
     func applyViewModeQuietly() { applyViewMode() }
 
+    // MARK: Pulse's tools (PulseFeatures.swift)
+
+    let noteBanner = NoteBanner()
+
+    /// Shows (or hides) the folder's note.
+    func refreshNote() {
+        let note = url.flatMap { $0.isFileURL && archive == nil ? FolderNotes.read($0) : nil }
+        guard note != noteBanner.text || noteBanner.isHidden != (note == nil) else { return }
+        noteBanner.text = note
+        Motion.animate(0.2) { [self] in
+            card.needsLayout = true
+            card.layoutSubtreeIfNeeded()
+        }
+    }
+
+    /// Lists the folder again with `names` selected (after something made them).
+    func reloadAndSelect(_ names: [String]) { reloadSelecting(names) }
+
     // MARK: zoom (⌘+ / ⌘− / ⌘0, ⌃+ / ⌃−, ⌘- or ⌃-scroll, pinch)
 
     /// Bigger or smaller: tiles step through their sizes, the list through its row heights. 0 goes back to the default.
@@ -453,7 +480,7 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
         v.frame = card.bounds
         v.isHidden = false
         if let page { v.show(page) }
-        [commandBar, header, scroll, tileScroll, status, message].forEach { $0.isHidden = true }
+        [commandBar, header, scroll, tileScroll, status, message, noteBanner].forEach { $0.isHidden = true }
         selectionChanged()
     }
 
@@ -471,7 +498,7 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
         }
         v.frame = card.bounds
         v.isHidden = false
-        [commandBar, header, scroll, tileScroll, status, message].forEach { $0.isHidden = true }
+        [commandBar, header, scroll, tileScroll, status, message, noteBanner].forEach { $0.isHidden = true }
         selectionChanged()
     }
 
@@ -541,6 +568,7 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
         arrange(folder)
         hideSettings()
         loadColumnData(url)
+        refreshNote()
         message.isHidden = true
         if card.subviews.contains(privacyButton) { privacyButton.isHidden = true }
         header.sortKey = sortKey
@@ -1186,6 +1214,7 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
         // Pulse's developer tools (DevTools.swift): the path in other forms, the file in its repository
         PathForms.menu(urls, into: b)
         PathForms.gitMenu(urls, into: b)
+        if archive == nil { PulseFeatureMenus.forItems(urls, list: self, into: b) }
         b.add(String(localized: "Make alias"), "link") { [weak self] in
             self?.run { try urls.map { try FileOps.makeAlias($0) } } done: { made in
                 FileUndo.shared.record(.trash(made), title: String(localized: "Make Alias"))
@@ -1368,6 +1397,10 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
             }
             b.add(String(localized: "Copy path"), "clipboard-copy") { MenuActions.copyPaths([dir]) }
             PathForms.gitMenu([dir], into: b)
+            if archive == nil {
+                b.separator()
+                PulseFeatureMenus.forFolder(dir, list: self, into: b)
+            }
         }
         b.add(String(localized: "Show hidden items"), "eye", key: ".", mods: [.command, .shift], checked: showHidden) { AppSettings.showHidden.toggle() }
         if let dir = url, dir.isFileURL {
