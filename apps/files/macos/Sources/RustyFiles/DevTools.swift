@@ -5,13 +5,22 @@ import AppKit
 enum Repo {
     /// The work tree `url` is in (the folder holding `.git`, a folder or a worktree's file), or nil.
     nonisolated static func root(of url: URL) -> URL? {
-        var d = url.hasDirectoryPath || (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true ? url : url.deletingLastPathComponent()
-        while true {
-            if FileManager.default.fileExists(atPath: d.appendingPathComponent(".git").path) { return d }
-            let up = d.deletingLastPathComponent()
-            if up.path == d.path { return nil }
+        let isDir = url.hasDirectoryPath || (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+        return findGitRoot(from: (isDir ? url : url.deletingLastPathComponent()).standardizedFileURL.path).map { URL(fileURLWithPath: $0) }
+    }
+
+    /// Walks up from `path` to the folder holding `.git`. On paths, not URLs: a file URL's `deletingLastPathComponent()`
+    /// at "/" gives "/..", then "/../.." and so on, so a walk on URLs never reached its end outside a repository (it ran
+    /// until memory ran out, 30 GB). A path stops at "/", and the walk is capped besides.
+    nonisolated static func findGitRoot(from path: String) -> String? {
+        var d = path.isEmpty ? "/" : path
+        for _ in 0..<256 {
+            if FileManager.default.fileExists(atPath: (d as NSString).appendingPathComponent(".git")) { return d }
+            let up = (d as NSString).deletingLastPathComponent
+            if up.isEmpty || up == d { return nil }
             d = up
         }
+        return nil
     }
 
     /// `git <args>` in `dir`, its output trimmed; nil when git fails or is missing.

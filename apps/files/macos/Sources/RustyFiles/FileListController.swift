@@ -1836,8 +1836,9 @@ extension FileListController {
         gitByName = [:]
         status.git = ""
         guard archive == nil else { return }
-        // the repository the folder is in: its branch and what changed, in the status bar
-        DispatchQueue.global(qos: .utility).async {
+        // the repository the folder is in: its branch and what changed, in the status bar (real folders only: not a tag's
+        // or a search's results, not a web page)
+        if dir.isFileURL { DispatchQueue.global(qos: .utility).async {
             guard Repo.root(of: dir) != nil, let s = Repo.summary(dir) else { return }
             var text = "⎇ \(s.branch)"
             if s.ahead > 0 { text += "  ↑\(s.ahead)" }
@@ -1849,7 +1850,7 @@ extension FileListController {
                     self.status.git = text
                 }
             }
-        }
+        } }
         let wantTags = AppSettings.showsColumn(.tags), wantGit = AppSettings.showsColumn(.git)
         guard wantTags || wantGit else { return }
         DispatchQueue.global(qos: .utility).async {

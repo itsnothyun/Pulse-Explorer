@@ -89,13 +89,8 @@ enum Editors {
         case "always": return true
         case "never": return false
         default:
-            var d = dir
-            while true {
-                if FileManager.default.fileExists(atPath: d.appendingPathComponent(".git").path) { return true }
-                let up = d.deletingLastPathComponent()
-                if up.path == d.path { return false }
-                d = up
-            }
+            // (on paths: a URL walk never ends outside a repository, see Repo.findGitRoot)
+            return Repo.findGitRoot(from: dir.standardizedFileURL.path) != nil
         }
     }
 
