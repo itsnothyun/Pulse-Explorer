@@ -144,11 +144,46 @@ final class TileCollectionView: NSCollectionView, NSServicesMenuRequestor {
         super.keyDown(with: event)
     }
 
+    /// Where a Shift-click's range starts: the item clicked last without Shift.
+    private var anchor: IndexPath?
+
+    /// Clicks select as in Finder's icon view: a click picks one item, ⌘ adds or takes away one, Shift picks the range
+    /// from the last clicked item (⇧⌘ adds the range to what is picked). Done here because the collection view's own
+    /// Shift-click did not extend the selection in this grid.
     override func mouseDown(with event: NSEvent) {
+        let at = indexPathForItem(at: convert(event.locationInWindow, from: nil))
+        let mods = event.modifierFlags.intersection([.shift, .command])
+        if let at, event.clickCount == 1, !mods.isEmpty {
+            window?.makeFirstResponder(self)
+            var picked = selectionIndexPaths
+            if mods.contains(.shift), let from = anchor ?? picked.min() {
+                let lo = min(from.item, at.item), hi = max(from.item, at.item)
+                let range = Set((lo...hi).map { IndexPath(item: $0, section: at.section) })
+                picked = mods.contains(.command) ? picked.union(range) : range
+            } else {
+                // ⌘ alone: this one in or out
+                if picked.contains(at) { picked.remove(at) } else { picked.insert(at) }
+                anchor = at
+            }
+            setSelection(picked)
+            return
+        }
         super.mouseDown(with: event)
-        if event.clickCount == 2, indexPathForItem(at: convert(event.locationInWindow, from: nil)) != nil {
+        if let at, mods.isEmpty { anchor = at }
+        if at == nil, mods.isEmpty { anchor = nil }
+        if event.clickCount == 2, at != nil {
             list?.openSelected()
         }
+    }
+
+    /// Picks exactly `picked`, telling the list what came and went (as a click would).
+    private func setSelection(_ picked: Set<IndexPath>) {
+        let old = selectionIndexPaths
+        let gone = old.subtracting(picked)
+        let new = picked.subtracting(old)
+        selectionIndexPaths = picked
+        if !gone.isEmpty { delegate?.collectionView?(self, didDeselectItemsAt: gone) }
+        if !new.isEmpty { delegate?.collectionView?(self, didSelectItemsAt: new) }
     }
 
     /// Pulse's right-click menu (PulseMenu): the same menu, opening with motion.
@@ -161,6 +196,7 @@ final class TileCollectionView: NSCollectionView, NSServicesMenuRequestor {
         let at = indexPathForItem(at: convert(event.locationInWindow, from: nil))
         if let at, !selectionIndexPaths.contains(at) {
             selectionIndexPaths = [at]
+            anchor = at
             delegate?.collectionView?(self, didSelectItemsAt: [at])
         }
         if at == nil {
