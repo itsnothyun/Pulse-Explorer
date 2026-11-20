@@ -430,6 +430,19 @@ final class TextCellView: HoverView {
 @MainActor
 final class FileTableView: NSTableView, NSServicesMenuRequestor {
     weak var list: FileListController?
+
+    /// ⌘- / ⌃-scroll and pinch zoom the list's rows (FileListController.zoom).
+    override func scrollWheel(with event: NSEvent) {
+        if !event.modifierFlags.intersection([.command, .control]).isEmpty, let list {
+            list.zoomGesture(event.scrollingDeltaY, notch: event.hasPreciseScrollingDeltas ? 24 : 1)
+            return
+        }
+        super.scrollWheel(with: event)
+    }
+
+    override func magnify(with event: NSEvent) {
+        list?.zoomGesture(event.magnification, notch: 0.18)
+    }
     private(set) var hoveredRow = -1
 
     override func keyDown(with event: NSEvent) {

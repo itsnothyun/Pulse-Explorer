@@ -68,7 +68,7 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
         super.init()
         rebuildColumns()
         table.headerView = nil
-        table.rowHeight = Metrics.rowHeight
+        table.rowHeight = ListZoom.rowHeight
         table.intercellSpacing = .zero
         table.style = .plain
         table.backgroundColor = .clear
@@ -344,6 +344,45 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
 
     func applyViewModeQuietly() { applyViewMode() }
 
+    // MARK: zoom (⌘+ / ⌘− / ⌘0, ⌃+ / ⌃−, ⌘- or ⌃-scroll, pinch)
+
+    /// Bigger or smaller: tiles step through their sizes, the list through its row heights. 0 goes back to the default.
+    func zoom(_ step: Int) {
+        let keep = selectedRows
+        switch viewMode {
+        case .tiles:
+            let next = step == 0 ? TileMetrics.defaultLevel : TileMetrics.level + step
+            guard next >= 0, next < TileMetrics.levels.count, next != TileMetrics.level else { return NSSound.beep() }
+            TileMetrics.level = next
+            tileLayout.itemSize = NSSize(width: TileMetrics.width, height: TileMetrics.rowHeight - TileMetrics.gap)
+            Motion.animate(0.22) { [self] in
+                tileLayout.invalidateLayout()
+                card.needsLayout = true
+                card.layoutSubtreeIfNeeded()
+            }
+            tiles.reloadData()
+        case .details:
+            let next = step == 0 ? ListZoom.defaultLevel : ListZoom.level + step
+            guard next >= 0, next < ListZoom.levels.count, next != ListZoom.level else { return NSSound.beep() }
+            ListZoom.level = next
+            table.rowHeight = ListZoom.rowHeight
+            table.noteHeightOfRows(withIndexesChanged: IndexSet(integersIn: 0..<table.numberOfRows))
+            table.reloadData()
+        }
+        selectRows(keep, scrollToFirst: true)
+        selectionChanged()
+    }
+
+    /// ⌘- / ⌃-scroll and pinch go a step per notch of movement, not per event.
+    private var zoomAccum: CGFloat = 0
+    func zoomGesture(_ delta: CGFloat, notch: CGFloat) {
+        zoomAccum += delta
+        if abs(zoomAccum) >= notch {
+            zoom(zoomAccum > 0 ? 1 : -1)
+            zoomAccum = 0
+        }
+    }
+
     private func applyViewMode() {
         let isTiles = viewMode == .tiles
         header.isHidden = isTiles
@@ -480,7 +519,7 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
         case "listBackground", "listImage", "listImageVisibility":
             card.applyBackground()
         case "fontFamily":
-            table.rowHeight = Metrics.rowHeight
+            table.rowHeight = ListZoom.rowHeight
             reloadItems()
             card.needsLayout = true
         case "dateStyle", "decimalSizes":
@@ -1788,7 +1827,7 @@ extension FileListController {
     }
 
     func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
-        Metrics.rowHeight + (groupTitles[row] == nil ? 0 : GroupMetrics.header)
+        ListZoom.rowHeight + (groupTitles[row] == nil ? 0 : GroupMetrics.header)
     }
 
     /// Tags and Git states for the folder, read off the main thread when their columns are on.

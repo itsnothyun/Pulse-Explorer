@@ -10,7 +10,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// New windows open the Home page, as on Windows.
     private var home: URL { BrowserTab.homeURL }
 
+    private var zoomKeys: Any?
+
+    /// ⌃+ / ⌃− / ⌃0 (as Ctrl on Windows) and ⌘= (the + key without Shift) zoom too; the menu has ⌘+ / ⌘− / ⌘0.
+    private func watchZoomKeys() {
+        zoomKeys = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
+            let mods = e.modifierFlags.intersection([.command, .control, .option])
+            guard mods == [.control] || mods == [.command], let c = e.charactersIgnoringModifiers,
+                let front = self?.frontController, front.window?.isKeyWindow == true,
+                !(front.window?.firstResponder is NSTextView)
+            else { return e }
+            switch (c, mods) {
+            case ("=", _), ("+", [.control]): front.zoomIn(nil)
+            case ("-", [.control]), ("_", [.control]): front.zoomOut(nil)
+            case ("0", [.control]): front.zoomReset(nil)
+            default: return e
+            }
+            return nil
+        }
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
+        watchZoomKeys()
         // Sizes and dates in rf-core's English wording until the interface is translated.
         // sizes and dates speak the interface's language ("bayt", decimal comma)
         setEnglish(on: !AppSettings.speaksTurkish)

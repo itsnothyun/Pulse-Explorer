@@ -862,6 +862,9 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     @objc func toggleQuickLook(_ sender: Any?) { list.toggleQuickLook() }
     @objc func showDetails(_ sender: Any?) { list.setViewMode(.details) }
     @objc func showTiles(_ sender: Any?) { list.setViewMode(.tiles) }
+    @objc func zoomIn(_ sender: Any?) { list.zoom(1) }
+    @objc func zoomOut(_ sender: Any?) { list.zoom(-1) }
+    @objc func zoomReset(_ sender: Any?) { list.zoom(0) }
 
     /// Properties of the selection, or of the folder shown when nothing is selected (⌘I).
     @objc func showProperties(_ sender: Any?) { list.showProperties() }

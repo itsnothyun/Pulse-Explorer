@@ -6,13 +6,35 @@ import QuickLookThumbnailing
 /// `GRID_SIZES[2]`): tiles 124 wide in rows 150 high with 4 between them, the picture asked
 /// for at 128 and drawn at 96, the label `text_xs`, centred, at most two lines.
 enum TileMetrics {
-    static let width: CGFloat = 124
-    static let rowHeight: CGFloat = 150
+    /// The picture's size at each zoom level (⌘+ / ⌘−, ⌃+ / ⌃−, ⌘-scroll, pinch); level 2 is the Windows default.
+    static let levels: [CGFloat] = [48, 64, 96, 128, 176, 256]
+    static let defaultLevel = 2
+    static var level: Int {
+        get {
+            let v = UserDefaults.standard.object(forKey: "tileZoom") as? Int ?? defaultLevel
+            return min(max(v, 0), levels.count - 1)
+        }
+        set { UserDefaults.standard.set(min(max(newValue, 0), levels.count - 1), forKey: "tileZoom") }
+    }
+    static var visual: CGFloat { levels[level] }
+    /// 124 × 150 at the default size: the picture, 28 across for the tile's padding, 54 down for two lines of name.
+    static var width: CGFloat { visual + 28 }
+    static var rowHeight: CGFloat { visual + 54 }
     static let gap: CGFloat = 4
-    static let visual: CGFloat = 96
     /// The grid's own padding (`py_2`, `px 6`).
     static let padX: CGFloat = 6
     static let padY: CGFloat = 8
+}
+
+/// The details list's row heights (zoom in details: compact, the Windows default, roomy).
+enum ListZoom {
+    static let levels: [CGFloat] = [24, 30, 38]
+    static let defaultLevel = 1
+    static var level: Int {
+        get { min(max(UserDefaults.standard.object(forKey: "rowZoom") as? Int ?? defaultLevel, 0), levels.count - 1) }
+        set { UserDefaults.standard.set(min(max(newValue, 0), levels.count - 1), forKey: "rowZoom") }
+    }
+    static var rowHeight: CGFloat { levels[level] }
 }
 
 /// Thumbnails from Quick Look, made off the main thread and kept for the session. A file
@@ -24,30 +46,31 @@ final class ThumbnailCache {
     private var failed: Set<String> = []
     private var pending: [String: [(NSImage) -> Void]] = [:]
 
-    func cached(_ path: String) -> NSImage? { images[path] }
+    func cached(_ path: String) -> NSImage? { images["\(Int(TileMetrics.visual))|" + path] }
 
     /// Calls `done` with the thumbnail when there is one (not at all when there is none).
     func request(_ path: String, scale: CGFloat, done: @escaping (NSImage) -> Void) {
-        if let image = images[path] { return done(image) }
+        let side = TileMetrics.visual
+        let key = "\(Int(side))|" + path
+        if let image = images[key] { return done(image) }
         guard !failed.contains(path) else { return }
-        if pending[path] != nil {
-            pending[path]?.append(done)
+        if pending[key] != nil {
+            pending[key]?.append(done)
             return
         }
-        pending[path] = [done]
-        let side = TileMetrics.visual
+        pending[key] = [done]
         let request = QLThumbnailGenerator.Request(
             fileAt: URL(fileURLWithPath: path), size: CGSize(width: side, height: side), scale: scale, representationTypes: .thumbnail)
         QLThumbnailGenerator.shared.generateBestRepresentation(for: request) { rep, _ in
             let cg = rep?.cgImage
             Task { @MainActor in
-                let waiting = ThumbnailCache.shared.pending.removeValue(forKey: path) ?? []
+                let waiting = ThumbnailCache.shared.pending.removeValue(forKey: key) ?? []
                 guard let cg else {
                     ThumbnailCache.shared.failed.insert(path)
                     return
                 }
                 let image = NSImage(cgImage: cg, size: NSSize(width: CGFloat(cg.width) / scale, height: CGFloat(cg.height) / scale))
-                ThumbnailCache.shared.images[path] = image
+                ThumbnailCache.shared.images[key] = image
                 waiting.forEach { $0(image) }
             }
         }
@@ -62,7 +85,7 @@ final class ThumbnailCache {
     /// Forgets a folder's thumbnails (its files changed).
     func forget(under dir: String) {
         let prefix = dir.hasSuffix("/") ? dir : dir + "/"
-        images = images.filter { !$0.key.hasPrefix(prefix) }
+        images = images.filter { !($0.key.split(separator: "|", maxSplits: 1).last.map(String.init) ?? "").hasPrefix(prefix) }
         failed = failed.filter { !$0.hasPrefix(prefix) }
     }
 }
@@ -142,6 +165,18 @@ final class TileCollectionView: NSCollectionView, NSServicesMenuRequestor {
     override func keyDown(with event: NSEvent) {
         if list?.handleKey(event) == true { return }
         super.keyDown(with: event)
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        if !event.modifierFlags.intersection([.command, .control]).isEmpty, let list {
+            list.zoomGesture(event.scrollingDeltaY, notch: event.hasPreciseScrollingDeltas ? 24 : 1)
+            return
+        }
+        super.scrollWheel(with: event)
+    }
+
+    override func magnify(with event: NSEvent) {
+        list?.zoomGesture(event.magnification, notch: 0.18)
     }
 
     /// Where a Shift-click's range starts: the item clicked last without Shift.
