@@ -23,6 +23,19 @@ export function QuickViewWindow() {
   const [media, setMedia] = useState<QuickViewPayload[]>([]);
   const paths = useRef(new Map<string, string>());
 
+  /**
+   * This window stays alive behind the file manager, so nothing it reads may pile up: the files of earlier batches (their
+   * bytes, their loaded documents) are let go when new ones come and when the window closes. Only `keep` stays.
+   */
+  const release = (keep: string[] = []) => {
+    const store = useWorkspaceStore.getState();
+    const keepSet = new Set(keep);
+    for (const f of store.files) {
+      if (!keepSet.has(f.id)) store.permanentlyRemoveFile(f.id);
+    }
+    for (const id of [...paths.current.keys()]) if (!keepSet.has(id)) paths.current.delete(id);
+  };
+
   useEffect(() => {
     const root = document.documentElement;
     // macOS draws the window's frame and traffic lights itself (apps/desktop main.rs show_quickview)
@@ -38,6 +51,7 @@ export function QuickViewWindow() {
     const onFiles = async (all: QuickViewPayload[]) => {
       // a batch that starts with a video or a song plays (its media files make the playlist); the rest is viewed
       if (all.length > 0 && isMediaPayload(all[0])) {
+        release();
         setQueue([]);
         setMedia(all.filter(isMediaPayload));
         setBatch((b) => b + 1);
@@ -66,6 +80,7 @@ export function QuickViewWindow() {
         }
       }
       if (ids.length > 0) {
+        release(ids);
         setQueue(ids);
         setBatch((b) => b + 1);
       }
@@ -79,6 +94,27 @@ export function QuickViewWindow() {
       unlisten?.();
     };
   }, [importFiles]);
+
+  // closed (Esc, its close button, the shell): what it showed goes, so the hidden window holds nothing
+  useEffect(() => {
+    let un: (() => void) | undefined;
+    let cancelled = false;
+    void import('@tauri-apps/api/event').then(({ listen }) =>
+      listen('pulse://quickview-closed', () => {
+        setQueue([]);
+        setMedia([]);
+        window.setTimeout(() => release(), 0);
+      }).then((fn) => {
+        if (cancelled) fn();
+        else un = fn;
+      })
+    );
+    return () => {
+      cancelled = true;
+      un?.();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const download = (file: DetectedFile) => {
     const buffer = useWorkspaceStore.getState().fileBuffers[file.id];

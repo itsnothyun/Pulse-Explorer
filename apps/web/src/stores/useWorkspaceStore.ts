@@ -409,8 +409,15 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   closeQuickView: (tabId) => {
     const tab = get().tabs.find((t) => t.tabId === tabId && t.isQuickView);
     if (!tab) return;
+    // the viewer's document (pdf.js pages, decoded pictures, object URLs) goes with the last tab that shows it
+    const stillShown = get().tabs.some((t) => t.fileId === tab.fileId && t.tabId !== tabId);
+    const doc = stillShown ? undefined : get().loadedDocuments[tab.fileId];
+    doc?.dispose();
     set((prev) => ({
       tabs: prev.tabs.filter((t) => t.tabId !== tabId),
+      loadedDocuments: doc
+        ? Object.fromEntries(Object.entries(prev.loadedDocuments).filter(([id]) => id !== tab.fileId))
+        : prev.loadedDocuments,
       lastSessionByFileId: {
         ...prev.lastSessionByFileId,
         [tab.fileId]: { currentPage: tab.currentPage, zoom: tab.zoom, rotation: tab.rotation, pdfViewMode: tab.pdfViewMode },

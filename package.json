@@ -13,6 +13,7 @@
     "desktop:tauri": "pnpm files:build && pnpm --filter @omniview/desktop tauri:dev",
     "desktop:build": "pnpm files:build && pnpm --filter @omniview/web build && pnpm --filter @omniview/desktop tauri:build",
     "desktop:build:mac": "bash apps/desktop/src-tauri/scripts/stage-mac-files.sh && pnpm --filter @omniview/web build && pnpm --filter @omniview/desktop tauri:build",
+    "desktop:install:mac": "bash apps/desktop/src-tauri/scripts/install-mac.sh",
     "files:build": "cargo build --release --manifest-path apps/files/Cargo.toml -p rf-app -p rf-dialog -p rf-shellguard",
     "files:build:mac": "bash apps/desktop/src-tauri/scripts/stage-mac-files.sh",
     "files:font": "python apps/files/tools/pulse-pixel/build_font.py",

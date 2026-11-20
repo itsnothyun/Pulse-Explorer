@@ -613,6 +613,9 @@ fn show_quickview(app: &AppHandle, files: Vec<OpenWithFilePayload>) {
     if files.is_empty() {
         return;
     }
+    if let Some(shown) = app.try_state::<QuickViewShown>() {
+        shown.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
     // macOS: this process runs in the background (no Dock icon); come forward, over the file manager.
     #[cfg(target_os = "macos")]
     let _ = app.show();
@@ -678,6 +681,36 @@ fn quickview_effects() -> tauri::utils::config::WindowEffectsConfig {
     }
 }
 
+/// Counts Quick View's showings, so a release scheduled before the last one can tell it is out of date.
+#[derive(Default)]
+struct QuickViewShown(std::sync::atomic::AtomicU64);
+
+/// How long a hidden Quick View keeps its page: opening the next file in that time is instant; after it, the page (and
+/// the web process behind it, a few hundred MB once documents and pictures were shown) is let go. With its last window
+/// gone this process ends too; the file manager keeps running, and the next file starts the viewer again (about a second).
+const QUICKVIEW_KEEP: std::time::Duration = std::time::Duration::from_secs(120);
+
+fn release_quickview_later(app: &AppHandle) {
+    let Some(shown) = app.try_state::<QuickViewShown>() else { return };
+    let at = shown.0.load(std::sync::atomic::Ordering::SeqCst);
+    let app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(QUICKVIEW_KEEP);
+        let still = app.try_state::<QuickViewShown>().is_some_and(|s| s.0.load(std::sync::atomic::Ordering::SeqCst) == at);
+        if !still {
+            return;
+        }
+        let h = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            if let Some(win) = h.get_webview_window(QUICKVIEW) {
+                if !win.is_visible().unwrap_or(true) {
+                    let _ = win.destroy();
+                }
+            }
+        });
+    });
+}
+
 /// Files waiting for a freshly created Quick View window.
 #[tauri::command]
 fn consume_quickview_files(state: State<'_, QuickViewQueue>) -> Vec<OpenWithFilePayload> {
@@ -693,9 +726,10 @@ fn close_quickview(app: AppHandle) {
         return;
     }
     if let Some(win) = app.get_webview_window(QUICKVIEW) {
-        // the player pauses with it (a hidden window would otherwise keep playing)
+        // the player pauses with it (a hidden window would otherwise keep playing), and the page lets go of what it showed
         let _ = win.emit_to(QUICKVIEW, "pulse://quickview-closed", ());
         let _ = win.hide();
+        release_quickview_later(&app);
     }
 }
 
@@ -744,6 +778,7 @@ fn main() {
                 .build(),
         )
         .manage(QuickViewQueue::default())
+        .manage(QuickViewShown::default())
         .invoke_handler(tauri::generate_handler![
             consume_startup_open_with_files,
             read_local_file_bytes,
