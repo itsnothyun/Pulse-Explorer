@@ -38,17 +38,42 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
 
     init(directory: URL) {
         view = LocalProcessTerminalView(frame: NSRect(x: 0, y: 0, width: 600, height: 400))
+        self.directory = directory
         super.init()
         view.processDelegate = self
         view.optionAsMetaKey = false  // Option types the Mac's characters (é, ñ, …), as in Ghostty's default
         view.font = Self.font
         apply(dark: true, text: NSColor(red: 0.949, green: 0.949, blue: 0.929, alpha: 1))
-        start(in: directory)
+    }
+
+    private let directory: URL
+    private(set) var started = false
+    private var dark = true
+
+    /// Starts the shell, once, when the pane has its real width: the welcome card first (Settings: terminalWelcome),
+    /// so the shell's first prompt comes under it.
+    func begin() {
+        guard !started else { return }
+        started = true
+        let dir = directory
+        guard UserDefaults.standard.object(forKey: "terminalWelcome") as? Bool ?? true else { return start(in: dir) }
+        let advance = ("W" as NSString).size(withAttributes: [.font: view.font]).width
+        let cols = max(Int(view.bounds.width / max(advance, 1)) - 1, 20)
+        let dark = self.dark
+        Task.detached(priority: .userInitiated) {
+            let info = TerminalWelcomeInfo.gather(dir, dark: dark)
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                self.view.feed(text: TerminalWelcome.render(info, cols: cols))
+                self.start(in: dir)
+            }
+        }
     }
 
     /// The file manager's look: no background of its own (the card's glass shows through, as behind the list), the
     /// palette's text colour, a caret and selection that read on light and dark.
     func apply(dark: Bool, text: NSColor) {
+        self.dark = dark
         view.nativeBackgroundColor = .clear
         view.nativeForegroundColor = text
         view.caretColor = text.withAlphaComponent(0.85)
@@ -83,7 +108,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     /// Reads what runs in front and where the shell is (polled by the page while it shows).
     @discardableResult
     func refresh() -> Bool {
-        guard let p = view.process, p.running else { return false }
+        guard started, let p = view.process, p.running else { return false }
         let a = ProcessInspect.activity(shell: p.shellPid, terminal: p.childfd)
         let changed = a != activity
         activity = a
@@ -160,6 +185,12 @@ final class TerminalPage {
     var title: String { (finishedInBackground ? "● " : "") + (focused?.title ?? "Terminal") }
     var directory: URL? { focused?.activity.directory.map { URL(fileURLWithPath: $0) } }
 
+    /// Starts the panes that are waiting (a new tab once it shows, a new split once it has its size).
+    func beginPending() {
+        container.layoutSubtreeIfNeeded()
+        for p in panes where !p.started { p.begin() }
+    }
+
     func focus() {
         guard let v = focused?.view else { return }
         v.window?.makeFirstResponder(v)
@@ -217,7 +248,10 @@ final class TerminalPage {
                 newHost.animator().alphaValue = 1
             }
         }
-        DispatchQueue.main.async { [weak self] in self?.focus() }
+        DispatchQueue.main.async { [weak self] in
+            self?.beginPending()
+            self?.focus()
+        }
         onChange?()
     }
 
@@ -345,5 +379,33 @@ final class TerminalContainer: NSView {
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
         onAppearance?()
+    }
+}
+
+/// What the welcome card says about a folder (read off the main thread: a directory listing, `git status`, the project
+/// file's scripts).
+enum TerminalWelcomeInfo {
+    nonisolated static func gather(_ dir: URL, dark: Bool) -> TerminalWelcome.Info {
+        var info = TerminalWelcome.Info(folder: dir.path, dark: dark)
+        info.items = (try? FileManager.default.contentsOfDirectory(atPath: dir.path))?.filter { !$0.hasPrefix(".") }.count
+        if Repo.root(of: dir) != nil, let g = Repo.summary(dir) {
+            info.branch = g.branch
+            info.changed = g.changed
+            info.ahead = g.ahead
+            info.behind = g.behind
+        }
+        info.commands = commands(in: dir)
+        return info
+    }
+
+    /// The project's scripts as commands, the usual ones first (dev, start, build, test).
+    nonisolated static func commands(in dir: URL) -> [String] {
+        let files = ["package.json", "Makefile", "justfile", "composer.json"].map { dir.appendingPathComponent($0) }
+        guard let file = files.first(where: { FileManager.default.fileExists(atPath: $0.path) }) else { return [] }
+        let scripts = ProjectScripts.scripts(in: file)
+        let rank = ["dev": 0, "start": 1, "serve": 2, "build": 3, "test": 4]
+        return scripts.enumerated().sorted { a, b in
+            (rank[a.element.name] ?? 10, a.offset) < (rank[b.element.name] ?? 10, b.offset)
+        }.map(\.element.command)
     }
 }

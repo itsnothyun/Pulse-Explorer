@@ -372,6 +372,9 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
             term.isShown = true
             watch()
             updateChrome()
+            // the shells start once the tab has its size (the welcome card is drawn to it)
+            root.layoutSubtreeIfNeeded()
+            term.beginPending()
             term.focus()
             // (once it is in the window and the window is key: typing goes to the shell from the first key)
             DispatchQueue.main.async { [weak term] in term?.focus() }

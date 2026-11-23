@@ -440,3 +440,55 @@ final class ProcessInspectTests: TempDirTestCase {
         XCTAssertTrue(ProcessInspect.Activity(program: "npm", directory: nil).isBusy)
     }
 }
+
+// MARK: - terminal welcome card
+
+final class TerminalWelcomeTests: XCTestCase {
+    let info = TerminalWelcome.Info(folder: "/Users/a/dev/pulse-explorer", items: 12, branch: "feat/macos-desktop", changed: 3, ahead: 1,
+                                    commands: ["pnpm run dev", "pnpm run build"], home: "/Users/a")
+
+    func testNoLineIsWiderThanThePaneAtAnyWidth() {
+        for cols in 20...160 {
+            for line in TerminalWelcome.plain(info, cols: cols) {
+                XCTAssertLessThanOrEqual(line.count, cols, "cols \(cols): \(line)")
+            }
+        }
+    }
+
+    func testFullCardRowsAreAllTheSameWidthAndBoxed() {
+        let lines = TerminalWelcome.plain(info, cols: 120)
+        let card = lines.prefix { !$0.hasPrefix("╰") } + [lines.first { $0.hasPrefix("╰") }!]
+        let widths = Set(card.map(\.count))
+        XCTAssertEqual(widths.count, 1, "every row of the card is as wide as its top: \(widths)")
+        XCTAssertTrue(lines[0].hasPrefix("╭─ Pulse "))
+        XCTAssertTrue(lines.contains { $0.contains("Pulse Explorer") })
+        XCTAssertTrue(lines.contains { $0.contains("~/dev/pulse-explorer") })
+        XCTAssertTrue(lines.contains { $0.contains("⎇ feat/macos-desktop ↑1 · 3 changed") })
+        XCTAssertTrue(lines.contains { $0.contains("pnpm run build") })
+        XCTAssertTrue(lines.contains { $0.contains("Try \"pnpm run dev\"") })
+        XCTAssertTrue(lines.contains { $0.contains("$#::==!") }, "the pulse line is drawn")
+    }
+
+    func testCompactAndTinyAndFallbacks() {
+        let compact = TerminalWelcome.plain(info, cols: 60)
+        XCTAssertFalse(compact.contains { $0.contains("$#::==!") }, "no art when compact")
+        XCTAssertTrue(compact.contains { $0.contains("Pulse Explorer") })
+        XCTAssertEqual(TerminalWelcome.plain(info, cols: 30).count, 1)
+        // no repository, no scripts: a plain suggestion and Pulse's own keys
+        let bare = TerminalWelcome.plain(.init(folder: "/tmp/x", home: "/Users/a"), cols: 100)
+        XCTAssertTrue(bare.contains { $0.contains("Try \"ls -la\"") })
+        XCTAssertTrue(bare.contains { $0.contains("⌘K commands") })
+        XCTAssertFalse(bare.contains { $0.contains("⎇") })
+    }
+
+    func testPathsAndColours() {
+        XCTAssertEqual(TerminalWelcome.shortPath("/Users/a", home: "/Users/a", max: 20), "~")
+        XCTAssertEqual(TerminalWelcome.shortPath("/Users/a/x/y/zzzzzzzz", home: "/Users/a", max: 8), "…zzzzzzz")
+        let raw = TerminalWelcome.render(info, cols: 120)
+        XCTAssertTrue(raw.contains("\u{1B}[38;2;"), "24-bit colour")
+        XCTAssertTrue(raw.hasSuffix("\r\n"))
+        var light = info
+        light.dark = false
+        XCTAssertNotEqual(TerminalWelcome.render(light, cols: 120), raw, "the light theme has its own colours")
+    }
+}
