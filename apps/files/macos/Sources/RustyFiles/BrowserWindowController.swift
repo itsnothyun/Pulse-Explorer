@@ -205,6 +205,9 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     @objc private func settingsChanged(_ note: Notification) {
         let key = AppSettings.changedKey(note)
         if key == "material" || key == "theme" { applyMaterial() }
+        // terminals take the card's new look too
+        let p = Palette.of(list.card)
+        tabs.forEach { $0.term?.applyLook(p) }
         list.apply(settingKey: key)
         func redraw(_ v: NSView) {
             v.needsDisplay = true
@@ -351,6 +354,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         let key = (ObjectIdentifier(tab), tab.url)
         if let k = shownKey, k.0 != key.0 || k.1 != key.1 { Motion.crossFade(list.card) }
         shownKey = key
+        // a terminal is see-through to the window's glass: the list's card is put away while one is in front
+        list.card.isHidden = tab.isTerminal
         // only the active tab's page shows; the card stays under it
         for t in tabs where t !== tab {
             t.page?.container.isHidden = true
@@ -1002,6 +1007,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         let p = TerminalPage(directory: TerminalAddress.directory(of: t.url) ?? FileManager.default.homeDirectoryForCurrentUser)
         t.term = p
         root.addSubview(p.container, positioned: .above, relativeTo: list.card)
+        p.applyLook(Palette.of(list.card))
         p.onChange = { [weak self, weak t] in
             guard let self, let t else { return }
             // the tab's address follows the shell, so a restored session opens where it was

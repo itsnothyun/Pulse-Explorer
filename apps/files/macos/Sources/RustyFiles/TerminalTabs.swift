@@ -42,11 +42,18 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         view.processDelegate = self
         view.optionAsMetaKey = false  // Option types the Mac's characters (é, ñ, …), as in Ghostty's default
         view.font = Self.font
-        view.nativeBackgroundColor = NSColor(red: 0.055, green: 0.055, blue: 0.051, alpha: 1)
-        view.nativeForegroundColor = NSColor(red: 0.949, green: 0.949, blue: 0.929, alpha: 1)
-        view.caretColor = NSColor(red: 0.949, green: 0.949, blue: 0.929, alpha: 0.9)
-        view.selectedTextBackgroundColor = NSColor.white.withAlphaComponent(0.22)
+        apply(dark: true, text: NSColor(red: 0.949, green: 0.949, blue: 0.929, alpha: 1))
         start(in: directory)
+    }
+
+    /// The file manager's look: no background of its own (the card's glass shows through, as behind the list), the
+    /// palette's text colour, a caret and selection that read on light and dark.
+    func apply(dark: Bool, text: NSColor) {
+        view.nativeBackgroundColor = .clear
+        view.nativeForegroundColor = text
+        view.caretColor = text.withAlphaComponent(0.85)
+        view.selectedTextBackgroundColor = (dark ? NSColor.white : NSColor.black).withAlphaComponent(dark ? 0.22 : 0.14)
+        view.layer?.backgroundColor = NSColor.clear.cgColor
     }
 
     static var fontSize: CGFloat {
@@ -110,7 +117,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
 /// A terminal tab's content: one or more panes in nested split views.
 @MainActor
 final class TerminalPage {
-    let container = NSView()
+    let container = TerminalContainer()
     private(set) var panes: [TerminalPane] = []
     private(set) var focused: TerminalPane?
     /// The tab's title or activity changed (the window renames its tab).
@@ -135,7 +142,12 @@ final class TerminalPage {
         container.wantsLayer = true
         container.layer?.cornerRadius = Metrics.radius
         container.layer?.masksToBounds = true
-        container.layer?.backgroundColor = NSColor(red: 0.055, green: 0.055, blue: 0.051, alpha: 1).cgColor
+        container.layer?.borderWidth = 1
+        // the system's light / dark switch reaches the container: the look follows it
+        container.onAppearance = { [weak self] in
+            guard let self else { return }
+            self.applyLook(Palette.of(self.container))
+        }
         let pane = makePane(in: directory)
         let host = paneHost(pane.view)
         host.frame = container.bounds
@@ -157,6 +169,7 @@ final class TerminalPage {
 
     private func makePane(in dir: URL) -> TerminalPane {
         let p = TerminalPane(directory: dir)
+        if let look { p.apply(dark: look.dark, text: look.text) }
         p.onExit = { [weak self] pane in self?.close(pane) }
         p.onTitle = { [weak self] in self?.onChange?() }
         panes.append(p)
@@ -167,7 +180,7 @@ final class TerminalPage {
     private func paneHost(_ v: NSView) -> NSView {
         let host = PaneHost(frame: NSRect(x: 0, y: 0, width: 900, height: 560))
         host.wantsLayer = true
-        host.layer?.backgroundColor = NSColor(red: 0.055, green: 0.055, blue: 0.051, alpha: 1).cgColor
+        host.layer?.backgroundColor = NSColor.clear.cgColor
         v.frame = host.bounds.insetBy(dx: 8, dy: 6)
         v.autoresizingMask = [.width, .height]
         host.addSubview(v)
@@ -242,6 +255,16 @@ final class TerminalPage {
 
     func closeFocused() { if let f = focused { close(f) } }
 
+    /// The look of the list's card (FileList.swift CardView): the palette's content wash over the window's glass, its
+    /// border; panes see-through on it. Applied on creation and when the theme or material changes.
+    private var look: (dark: Bool, text: NSColor)?
+    func applyLook(_ p: Palette) {
+        look = (p.dark, p.text)
+        container.layer?.backgroundColor = p.contentBg.cgColor
+        container.layer?.borderColor = p.border.cgColor
+        for pane in panes { pane.apply(dark: p.dark, text: p.text) }
+    }
+
     /// ⌘+ / ⌘− / ⌘0: the text size of every pane (9 to 28 pt, 13 by default), remembered.
     func zoom(_ step: Int) {
         let now = TerminalPane.fontSize
@@ -313,5 +336,14 @@ private final class PaneHost: NSView {
             page.noteFocus(subviews.first ?? self)
         }
         return v
+    }
+}
+
+/// A terminal tab's container: says when the system's appearance changes (light / dark), so the look can follow.
+final class TerminalContainer: NSView {
+    var onAppearance: (() -> Void)?
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        onAppearance?()
     }
 }
