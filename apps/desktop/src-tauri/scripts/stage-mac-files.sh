@@ -16,7 +16,7 @@ cp -R "$SRC" "$APP"
 cp "$FILES/LICENSE" "$OUT/LICENSE"
 # third-party notices the MIT licences ask to ship with the app (the terminal tabs' SwiftTerm)
 ST="$FILES/macos/Vendor/SwiftTerm/LICENSE"
-[ -f "$ST" ] && cp "$ST" "$OUT/LICENSE-SwiftTerm"
+[ -f "$ST" ] && cp "$ST" "$OUT/LICENSE-SwiftTerm" && chmod u+w "$OUT/LICENSE-SwiftTerm"  # (a read-only copy stops the next build from replacing it)
 
 PL="$APP/Contents/Info.plist"
 mv "$APP/Contents/MacOS/RustyFiles" "$APP/Contents/MacOS/Pulse Explorer"
