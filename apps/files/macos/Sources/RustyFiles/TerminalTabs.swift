@@ -4,8 +4,8 @@ import SwiftTerm
 
 /// Terminal tabs (the "+" button's menu, ⌃`): a real terminal in a Pulse tab, opened in the folder you were in.
 ///
-/// The terminal itself is SwiftTerm (MIT, Miguel de Icaza; Pulse's fork github.com/itsnothyun/SwiftTerm, pinned in
-/// Package.swift): a full xterm-compatible emulator with the user's own login shell behind it. What Pulse adds, after
+/// The terminal itself is SwiftTerm (MIT, Miguel de Icaza), vendored in Vendor/SwiftTerm (see VENDORED.md there): a full
+/// xterm-compatible emulator with the user's own login shell behind it. What Pulse adds, after
 /// Ghostty and herdr: panes split right (⌘D) and down (⇧⌘D) in one tab, moved between with ⌘[ / ⌘], closed with ⌘W;
 /// the tab named after what runs in it ("claude — pulse") or its folder; and a mark on a tab whose long command finished
 /// while you were elsewhere. The shell's folder and foreground program are read from the kernel (ProcessInspect).
