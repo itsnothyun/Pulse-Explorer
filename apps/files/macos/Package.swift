@@ -11,8 +11,9 @@ let package = Package(
     name: "RustyFiles",
     platforms: [.macOS("26.0")],
     dependencies: [
-        // Terminal tabs: SwiftTerm (MIT, Miguel de Icaza), from Pulse's own fork so it can carry our patches; pinned.
-        .package(url: "https://github.com/itsnothyun/SwiftTerm", exact: "1.99.3"),
+        // Terminal tabs: SwiftTerm (MIT, Miguel de Icaza) v1.99.3, vendored in Vendor/SwiftTerm (see its VENDORED.md):
+        // no fork or download needed, and Pulse can patch it in place.
+        .package(path: "Vendor/SwiftTerm"),
     ],
     targets: [
         // The C header UniFFI generates for the Rust core (copied in by build.sh).
