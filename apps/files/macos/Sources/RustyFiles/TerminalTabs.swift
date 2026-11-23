@@ -99,6 +99,10 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         animation = Timer.scheduledTimer(withTimeInterval: 0.028, repeats: true) { [weak self] t in
             MainActor.assumeIsolated {
                 guard let self, i < frames.count else { return t.invalidate() }
+                // something already runs (an agent cleared the screen for itself): the art is not drawn over it
+                if let p = self.view.process, p.running, let fg = ProcessInspect.foreground(ofTerminal: p.childfd), fg != p.shellPid {
+                    return t.invalidate()
+                }
                 self.view.feed(text: frames[i])
                 i += 1
             }

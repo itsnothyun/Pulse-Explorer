@@ -17,13 +17,41 @@ public enum ProcessInspect {
         return path.isEmpty ? nil : path
     }
 
-    /// The short name of `pid`'s program ("zsh", "node", "claude"), or nil.
+    /// The short name of `pid`'s program ("zsh", "node", "claude"), or nil. A program installed as a versioned file
+    /// behind a link (Claude Code: ~/.local/bin/claude → …/versions/2.1.330) is named as it was started ("claude"),
+    /// not by its version.
     public static func name(of pid: pid_t) -> String? {
         guard pid > 0 else { return nil }
         var buf = [CChar](repeating: 0, count: Int(MAXCOMLEN) * 4 + 1)
         guard proc_name(pid, &buf, UInt32(buf.count)) > 0 else { return nil }
         let n = String(cString: buf)
+        if looksLikeVersion(n), let a = argv0(of: pid) {
+            let started = (a as NSString).lastPathComponent
+            if !started.isEmpty, !looksLikeVersion(started) { return started }
+        }
         return n.isEmpty ? nil : n
+    }
+
+    /// "2.1.330", "1.4", "20": a name made of digits and dots only.
+    static func looksLikeVersion(_ s: String) -> Bool {
+        !s.isEmpty && s.first!.isNumber && s.allSatisfy { $0.isNumber || $0 == "." }
+    }
+
+    /// The first argument `pid` was started with (KERN_PROCARGS2), or nil.
+    public static func argv0(of pid: pid_t) -> String? {
+        var mib: [Int32] = [CTL_KERN, KERN_PROCARGS2, pid]
+        var size = 0
+        guard sysctl(&mib, 3, nil, &size, nil, 0) == 0, size > MemoryLayout<Int32>.size else { return nil }
+        var buf = [UInt8](repeating: 0, count: size)
+        guard sysctl(&mib, 3, &buf, &size, nil, 0) == 0 else { return nil }
+        // argc, then the executable's path, NULs, then argv[0]
+        var i = MemoryLayout<Int32>.size
+        while i < size, buf[i] != 0 { i += 1 }
+        while i < size, buf[i] == 0 { i += 1 }
+        let start = i
+        while i < size, buf[i] != 0 { i += 1 }
+        guard i > start else { return nil }
+        return String(decoding: buf[start..<i], as: UTF8.self)
     }
 
     /// The foreground process group of the terminal `fd` (the program in front), or nil.

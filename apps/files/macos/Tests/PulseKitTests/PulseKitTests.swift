@@ -583,3 +583,60 @@ extension TerminalWelcomeTests {
         XCTAssertEqual(strip(frames.last!), TerminalWelcome.art.joined())
     }
 }
+
+extension ShellIntegrationTests {
+    func testCodingAgentsAreRecognised() throws {
+        let lines = [
+            "claude", "claude --resume", "FOO=1 claude", "agy", "agy --help", "codex exec hi", "gemini", "opencode",
+            "npx @anthropic-ai/claude-code", "npx -y @google/gemini-cli", "pnpm dlx opencode", "env DEBUG=1 claude",
+            "/Users/a/.local/bin/claude", "nohup aider",
+            // not agents
+            "ls -la", "git commit -m claude", "echo claude", "pnpm run dev", "vim claude.md", "",
+        ]
+        let script = lines.map { "_pulse_is_agent '\($0)' && print -r -- 'A:\($0)' || print -r -- 'N:\($0)'" }.joined(separator: "; ")
+        let out = try zsh(script, home: try home(nil))
+        for l in lines.prefix(14) { XCTAssertTrue(out.contains("A:\(l)\n"), "\(l) is an agent: \(out)") }
+        for l in lines.suffix(6) { XCTAssertTrue(out.contains("N:\(l)\n"), "\(l) is not: \(out)") }
+        let extra = try zsh("_pulse_is_agent 'myagent --go' && print yes", home: try home(nil), env: ["PULSE_EXTRA_AGENTS": "myagent"])
+        XCTAssertTrue(extra.contains("yes"), extra)
+    }
+
+    func testAnAgentGetsAClearScreenAndOtherCommandsTheClosedBox() throws {
+        let out = try zsh(#"_pulse_precmd; _pulse_preexec 'claude' 'claude' 'claude'; print -r -- '|'; _pulse_preexec 'ls' 'ls' 'ls'"#, home: try home(nil))
+        let parts = out.components(separatedBy: "|")
+        XCTAssertTrue(parts[0].contains("\u{1B}[H\u{1B}[2J"), "cleared for the agent")
+        XCTAssertFalse(parts[0].contains("╰"), "no box under an agent")
+        XCTAssertTrue(parts[1].contains("╰") && !parts[1].contains("\u{1B}[2J"), "a plain command closes the box")
+    }
+}
+
+extension ProcessInspectTests {
+    /// Claude Code's case: a link named "claude" to a binary named by its version.
+    func testAVersionedBinaryIsNamedAsItWasStarted() throws {
+        let versions = dir.appendingPathComponent("versions")
+        try FileManager.default.createDirectory(at: versions, withIntermediateDirectories: true)
+        let bin = versions.appendingPathComponent("9.9.9")
+        try FileManager.default.copyItem(atPath: "/bin/sleep", toPath: bin.path)
+        // a copied system binary must be signed again to run
+        let sign = Process()
+        sign.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
+        sign.arguments = ["--force", "--sign", "-", bin.path]
+        sign.standardError = FileHandle.nullDevice
+        try sign.run()
+        sign.waitUntilExit()
+        let link = dir.appendingPathComponent("mytool")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: bin)
+        let p = Process()
+        p.executableURL = link
+        p.arguments = ["5"]
+        try p.run()
+        defer { p.terminate() }
+        Thread.sleep(forTimeInterval: 0.3)
+        XCTAssertTrue(p.isRunning)
+        XCTAssertEqual(ProcessInspect.argv0(of: p.processIdentifier).map { ($0 as NSString).lastPathComponent }, "mytool")
+        XCTAssertEqual(ProcessInspect.name(of: p.processIdentifier), "mytool")
+        XCTAssertTrue(ProcessInspect.looksLikeVersion("2.1.330"))
+        XCTAssertFalse(ProcessInspect.looksLikeVersion("node"))
+        XCTAssertFalse(ProcessInspect.looksLikeVersion("python3.12"))
+    }
+}

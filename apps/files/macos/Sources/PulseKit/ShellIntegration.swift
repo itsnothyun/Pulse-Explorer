@@ -99,9 +99,34 @@ public enum ShellIntegration {
         region_highlight=( ${region_highlight:#*pulse*} )
         zle -R
       }
-      # once a command runs: the hint is not offered again, the box is closed in the scrollback
+      # coding agents (Claude Code, Antigravity, Codex, Gemini, …) draw their own interface: before one starts, Pulse's
+      # card and box leave the screen; PULSE_EXTRA_AGENTS adds names
+      typeset -ga PULSE_AGENTS=( claude claude-code agy antigravity codex gemini aider opencode amp cursor-agent goose crush qwen droid copilot ${=PULSE_EXTRA_AGENTS} )
+      _pulse_is_agent() {
+        local -a w=( ${(z)1} )
+        local -i i=1
+        while (( i <= $#w )); do
+          case ${w[i]} in
+            *=*|env|command|builtin|exec|nocorrect|noglob|time|nohup|caffeinate|-*) (( i++ )) ;;
+            npx|bunx|pnpx|uvx|pipx) (( i++ )); [[ ${w[i]} == run ]] && (( i++ )) ;;
+            pnpm|yarn|bun|npm) if [[ ${w[i+1]} == (dlx|x|exec) ]]; then (( i += 2 )); else break; fi ;;
+            *) break ;;
+          esac
+        done
+        (( i > $#w )) && return 1
+        local cmd=${${w[i]:t}%%@*}
+        [[ -z $cmd ]] && cmd=${${w[i]#@*/}%%@*}
+        [[ $cmd == *-cli ]] && cmd=${cmd%-cli}
+        (( ${PULSE_AGENTS[(Ie)$cmd]} ))
+      }
+
+      # once a command runs: the hint is not offered again, the box is closed in the scrollback; an agent gets a clean screen
       _pulse_preexec() {
         PULSE_TRY=""
+        if _pulse_is_agent "${3:-$1}"; then
+          print -n $'\e[H\e[2J'
+          return
+        fi
         print -P "%F{$_pulse_bc}╰${(l:$(( PULSE_W - 2 ))::─:)}╯%f"
       }
 
