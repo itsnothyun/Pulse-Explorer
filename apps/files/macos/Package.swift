@@ -10,6 +10,10 @@ let repoRoot = URL(fileURLWithPath: #filePath).deletingLastPathComponent().delet
 let package = Package(
     name: "RustyFiles",
     platforms: [.macOS("26.0")],
+    dependencies: [
+        // Terminal tabs: SwiftTerm (MIT, Miguel de Icaza), from Pulse's own fork so it can carry our patches; pinned.
+        .package(url: "https://github.com/itsnothyun/SwiftTerm", exact: "1.99.3"),
+    ],
     targets: [
         // The C header UniFFI generates for the Rust core (copied in by build.sh).
         .target(name: "rf_macFFI", path: "Sources/rf_macFFI"),
@@ -18,7 +22,7 @@ let package = Package(
         .testTarget(name: "PulseKitTests", dependencies: ["PulseKit"], path: "Tests/PulseKitTests"),
         .executableTarget(
             name: "RustyFiles",
-            dependencies: ["rf_macFFI", "PulseKit"],
+            dependencies: ["rf_macFFI", "PulseKit", .product(name: "SwiftTerm", package: "SwiftTerm")],
             path: "Sources/RustyFiles",
             linkerSettings: [
                 // The static library by full path, so the linker never picks the .dylib next to it.

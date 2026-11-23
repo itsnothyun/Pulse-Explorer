@@ -63,6 +63,10 @@ enum MainMenu {
         m.addItem(item(String(localized: "New Window"), #selector(AppDelegate.newWindow(_:)), "n"))
         m.addItem(item(String(localized: "New Tab"), #selector(W.newTab(_:)), "t"))
         m.addItem(item(String(localized: "New Browser Tab"), #selector(W.newBrowserTab(_:)), "t", [.command, .option]))
+        m.addItem(item(String(localized: "New Terminal Tab"), #selector(W.newTerminalTab(_:)), "`", .control))
+        m.addItem(item(String(localized: "Split Terminal Right"), #selector(W.splitTerminalRight(_:)), "d"))
+        // ⇧⌘D splits down only in a terminal tab (AppDelegate's key watch); elsewhere it stays Go › Desktop
+        m.addItem(item(String(localized: "Split Terminal Down (⇧⌘D)"), #selector(W.splitTerminalDown(_:))))
         m.addItem(item(String(localized: "New Folder"), #selector(W.newFolder(_:)), "n", [.command, .shift]))
         m.addItem(.separator())
         m.addItem(item(String(localized: "Open"), #selector(W.openSelection(_:)), key(NSDownArrowFunctionKey)))

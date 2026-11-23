@@ -15,9 +15,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// ⌃+ / ⌃− / ⌃0 (as Ctrl on Windows) and ⌘= (the + key without Shift) zoom too; the menu has ⌘+ / ⌘− / ⌘0.
     private func watchZoomKeys() {
         zoomKeys = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
+            // ⇧⌘D in a terminal tab splits it downward (Ghostty's key); elsewhere it goes on to Go › Desktop
+            if e.modifierFlags.intersection([.command, .shift, .control, .option]) == [.command, .shift], e.charactersIgnoringModifiers?.lowercased() == "d",
+                let front = self?.frontController, front.terminalPageInFront != nil, front.window?.isKeyWindow == true
+            {
+                front.splitTerminalDown(nil)
+                return nil
+            }
             let mods = e.modifierFlags.intersection([.command, .control, .option])
             guard mods == [.control] || mods == [.command], let c = e.charactersIgnoringModifiers,
                 let front = self?.frontController, front.window?.isKeyWindow == true,
+                // in a terminal, ⌃ keys belong to the shell (⌃- is undo there)
+                !(mods == [.control] && front.terminalPageInFront != nil),
                 !(front.window?.firstResponder is NSTextView)
             else { return e }
             switch (c, mods) {
@@ -73,7 +82,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if controllers.isEmpty {
             // RF_START (development): a folder to open, or a file to open its folder with it selected
             let env = ProcessInfo.processInfo.environment["RF_START"]
-            if let env, env.hasPrefix("settings") {
+            // RF_START=terminal:<folder> (development): a window on a terminal tab there
+            if let env, env.hasPrefix("terminal:") {
+                openWindow(at: TerminalAddress.url(in: URL(fileURLWithPath: String(env.dropFirst("terminal:".count)))))
+            } else if let env, env.hasPrefix("settings") {
                 let wc = openWindow(at: home)
                 wc.openSettings(nil)
                 let page = env.split(separator: ":").dropFirst().first.map(String.init) ?? ""

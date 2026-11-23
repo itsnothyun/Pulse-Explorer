@@ -385,3 +385,58 @@ final class ShelfTests: TempDirTestCase {
         XCTAssertEqual(plan.map(\.to.lastPathComponent), ["report 2.pdf", "report 3.pdf", ".env"])
     }
 }
+
+// MARK: - terminal process inspection
+
+final class ProcessInspectTests: TempDirTestCase {
+    func testOwnProcess() {
+        let me = getpid()
+        XCTAssertEqual(ProcessInspect.cwd(of: me).map { URL(fileURLWithPath: $0).standardizedFileURL.path },
+                       URL(fileURLWithPath: FileManager.default.currentDirectoryPath).standardizedFileURL.path)
+        XCTAssertNotNil(ProcessInspect.name(of: me))
+        XCTAssertNil(ProcessInspect.cwd(of: -1))
+        XCTAssertNil(ProcessInspect.name(of: 0))
+        XCTAssertNil(ProcessInspect.foreground(ofTerminal: -1))
+    }
+
+    func testAChildsDirectoryAndName() throws {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/bin/sleep")
+        p.arguments = ["5"]
+        p.currentDirectoryURL = dir
+        try p.run()
+        defer { p.terminate() }
+        Thread.sleep(forTimeInterval: 0.2)
+        let cwd = try XCTUnwrap(ProcessInspect.cwd(of: p.processIdentifier))
+        XCTAssertEqual(URL(fileURLWithPath: cwd).resolvingSymlinksInPath().path, dir.resolvingSymlinksInPath().path)
+        XCTAssertEqual(ProcessInspect.name(of: p.processIdentifier), "sleep")
+    }
+
+    func testForegroundOfARealPseudoTerminal() throws {
+        // a shell on a pty running `sleep`: the foreground group is sleep's, not the shell's
+        var master: Int32 = -1
+        // the arguments are made before the fork: the child only execs
+        let words: [String] = ["/bin/sh", "-c", "sleep 3"]
+        let owned: [UnsafeMutablePointer<CChar>?] = words.map { (w: String) -> UnsafeMutablePointer<CChar>? in strdup(w) }
+        defer { owned.forEach { free($0) } }
+        let args: [UnsafeMutablePointer<CChar>?] = owned + [nil]
+        let pid = forkpty(&master, nil, nil, nil)
+        if pid == 0 {
+            execv("/bin/sh", args)
+            _exit(1)
+        }
+        XCTAssertGreaterThan(pid, 0)
+        defer { kill(pid, SIGKILL); close(master) }
+        Thread.sleep(forTimeInterval: 0.3)
+        let fg = try XCTUnwrap(ProcessInspect.foreground(ofTerminal: master))
+        XCTAssertNotNil(ProcessInspect.name(of: fg))
+    }
+
+    func testTitles() {
+        XCTAssertEqual(ProcessInspect.title(.init(program: nil, directory: "/Users/a/dev/pulse"), home: "/Users/a"), "pulse")
+        XCTAssertEqual(ProcessInspect.title(.init(program: nil, directory: "/Users/a"), home: "/Users/a"), "~")
+        XCTAssertEqual(ProcessInspect.title(.init(program: "claude", directory: "/Users/a/dev/pulse"), home: "/Users/a"), "claude — pulse")
+        XCTAssertEqual(ProcessInspect.title(.init(program: nil, directory: nil)), "Terminal")
+        XCTAssertTrue(ProcessInspect.Activity(program: "npm", directory: nil).isBusy)
+    }
+}

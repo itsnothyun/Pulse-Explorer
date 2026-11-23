@@ -1,0 +1,317 @@
+import AppKit
+import PulseKit
+import SwiftTerm
+
+/// Terminal tabs (the "+" button's menu, ⌃`): a real terminal in a Pulse tab, opened in the folder you were in.
+///
+/// The terminal itself is SwiftTerm (MIT, Miguel de Icaza; Pulse's fork github.com/itsnothyun/SwiftTerm, pinned in
+/// Package.swift): a full xterm-compatible emulator with the user's own login shell behind it. What Pulse adds, after
+/// Ghostty and herdr: panes split right (⌘D) and down (⇧⌘D) in one tab, moved between with ⌘[ / ⌘], closed with ⌘W;
+/// the tab named after what runs in it ("claude — pulse") or its folder; and a mark on a tab whose long command finished
+/// while you were elsewhere. The shell's folder and foreground program are read from the kernel (ProcessInspect).
+enum TerminalAddress {
+    nonisolated static func url(in dir: URL) -> URL {
+        var c = URLComponents()
+        c.scheme = "rustyfiles"
+        c.path = "terminal"
+        c.queryItems = [URLQueryItem(name: "cwd", value: dir.path)]
+        return c.url!
+    }
+
+    nonisolated static func directory(of url: URL) -> URL? {
+        guard url.scheme == "rustyfiles", let c = URLComponents(url: url, resolvingAgainstBaseURL: false), c.path == "terminal" else { return nil }
+        let cwd = c.queryItems?.first(where: { $0.name == "cwd" })?.value ?? NSHomeDirectory()
+        return URL(fileURLWithPath: cwd)
+    }
+
+    nonisolated static func isTerminal(_ url: URL) -> Bool { directory(of: url) != nil }
+}
+
+/// One pane: a SwiftTerm view running a login shell, in Pulse's colours.
+@MainActor
+final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
+    let view: LocalProcessTerminalView
+    var onExit: ((TerminalPane) -> Void)?
+    var onTitle: (() -> Void)?
+    private(set) var shellTitle: String?
+    private(set) var activity = ProcessInspect.Activity(program: nil, directory: nil)
+
+    init(directory: URL) {
+        view = LocalProcessTerminalView(frame: NSRect(x: 0, y: 0, width: 600, height: 400))
+        super.init()
+        view.processDelegate = self
+        view.optionAsMetaKey = false  // Option types the Mac's characters (é, ñ, …), as in Ghostty's default
+        view.font = Self.font
+        view.nativeBackgroundColor = NSColor(red: 0.055, green: 0.055, blue: 0.051, alpha: 1)
+        view.nativeForegroundColor = NSColor(red: 0.949, green: 0.949, blue: 0.929, alpha: 1)
+        view.caretColor = NSColor(red: 0.949, green: 0.949, blue: 0.929, alpha: 0.9)
+        view.selectedTextBackgroundColor = NSColor.white.withAlphaComponent(0.22)
+        start(in: directory)
+    }
+
+    static var fontSize: CGFloat {
+        get { let v = UserDefaults.standard.double(forKey: "terminalFontSize"); return v >= 9 ? v : 13 }
+        set { UserDefaults.standard.set(Double(newValue), forKey: "terminalFontSize") }
+    }
+
+    static var font: NSFont {
+        NSFont(name: "SF Mono", size: fontSize) ?? NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
+    }
+
+    /// The user's own shell as a login shell ("-zsh"), so their profile, PATH and prompt are all there.
+    private func start(in dir: URL) {
+        let shell = ProcessInfo.processInfo.environment["SHELL"].flatMap { FileManager.default.isExecutableFile(atPath: $0) ? $0 : nil } ?? "/bin/zsh"
+        var env = ProcessInfo.processInfo.environment
+        env["TERM"] = "xterm-256color"
+        env["COLORTERM"] = "truecolor"
+        env["TERM_PROGRAM"] = "PulseExplorer"
+        env["LANG"] = env["LANG"] ?? "en_US.UTF-8"
+        // what Pulse's own launch put there is not the user's
+        env.removeValue(forKey: "PULSE_VIEWER")
+        let cwd = FileManager.default.fileExists(atPath: dir.path) ? dir.path : NSHomeDirectory()
+        view.startProcess(executable: shell, args: ["-l"], environment: env.map { "\($0.key)=\($0.value)" },
+                          execName: "-" + (shell as NSString).lastPathComponent, currentDirectory: cwd)
+    }
+
+    /// Reads what runs in front and where the shell is (polled by the page while it shows).
+    @discardableResult
+    func refresh() -> Bool {
+        guard let p = view.process, p.running else { return false }
+        let a = ProcessInspect.activity(shell: p.shellPid, terminal: p.childfd)
+        let changed = a != activity
+        activity = a
+        return changed
+    }
+
+    var title: String { shellTitle.flatMap { $0.isEmpty ? nil : $0 } ?? ProcessInspect.title(activity) }
+
+    func terminate() { view.process?.terminate() }
+
+    // MARK: SwiftTerm
+
+    nonisolated func sizeChanged(source: LocalProcessTerminalView, newCols: Int, newRows: Int) {}
+
+    nonisolated func setTerminalTitle(source: LocalProcessTerminalView, title: String) {
+        MainActor.assumeIsolated {
+            shellTitle = title
+            onTitle?()
+        }
+    }
+
+    nonisolated func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {
+        MainActor.assumeIsolated { onTitle?() }
+    }
+
+    nonisolated func processTerminated(source: TerminalView, exitCode: Int32?) {
+        MainActor.assumeIsolated { onExit?(self) }
+    }
+}
+
+/// A terminal tab's content: one or more panes in nested split views.
+@MainActor
+final class TerminalPage {
+    let container = NSView()
+    private(set) var panes: [TerminalPane] = []
+    private(set) var focused: TerminalPane?
+    /// The tab's title or activity changed (the window renames its tab).
+    var onChange: (() -> Void)?
+    /// The last pane closed: the tab goes.
+    var onEmpty: (() -> Void)?
+    /// A long command ended while this tab was in the background.
+    private(set) var finishedInBackground = false
+    var isShown = false {
+        didSet {
+            if isShown { finishedInBackground = false }
+            updateTimer()
+        }
+    }
+
+    private var timer: Timer?
+    private var busySince: [ObjectIdentifier: Date] = [:]
+
+    init(directory: URL) {
+        // a real size from the start: panes laid out in a zero-sized view get a null frame and never stretch
+        container.frame = NSRect(x: 0, y: 0, width: 900, height: 560)
+        container.wantsLayer = true
+        container.layer?.cornerRadius = Metrics.radius
+        container.layer?.masksToBounds = true
+        container.layer?.backgroundColor = NSColor(red: 0.055, green: 0.055, blue: 0.051, alpha: 1).cgColor
+        let pane = makePane(in: directory)
+        let host = paneHost(pane.view)
+        host.frame = container.bounds
+        host.autoresizingMask = [.width, .height]
+        container.addSubview(host)
+        focused = pane
+        updateTimer()
+    }
+
+    var title: String { (finishedInBackground ? "● " : "") + (focused?.title ?? "Terminal") }
+    var directory: URL? { focused?.activity.directory.map { URL(fileURLWithPath: $0) } }
+
+    func focus() {
+        guard let v = focused?.view else { return }
+        v.window?.makeFirstResponder(v)
+    }
+
+    // MARK: panes
+
+    private func makePane(in dir: URL) -> TerminalPane {
+        let p = TerminalPane(directory: dir)
+        p.onExit = { [weak self] pane in self?.close(pane) }
+        p.onTitle = { [weak self] in self?.onChange?() }
+        panes.append(p)
+        return p
+    }
+
+    /// The pane in a little padding, so text doesn't touch the card's rounded edge.
+    private func paneHost(_ v: NSView) -> NSView {
+        let host = PaneHost(frame: NSRect(x: 0, y: 0, width: 900, height: 560))
+        host.wantsLayer = true
+        host.layer?.backgroundColor = NSColor(red: 0.055, green: 0.055, blue: 0.051, alpha: 1).cgColor
+        v.frame = host.bounds.insetBy(dx: 8, dy: 6)
+        v.autoresizingMask = [.width, .height]
+        host.addSubview(v)
+        return host
+    }
+
+    /// Splits the focused pane: a new shell beside it (right) or under it (down), in the same folder.
+    func split(vertical: Bool) {
+        guard let current = focused, let host = current.view.superview, let parent = host.superview else { return }
+        let dir = current.activity.directory.map { URL(fileURLWithPath: $0) } ?? URL(fileURLWithPath: NSHomeDirectory())
+        let pane = makePane(in: dir)
+        let newHost = paneHost(pane.view)
+        let split = NSSplitView(frame: host.frame)
+        split.isVertical = vertical
+        split.dividerStyle = .thin
+        split.autoresizingMask = [.width, .height]
+        if let parentSplit = parent as? NSSplitView, let i = parentSplit.arrangedSubviews.firstIndex(of: host) {
+            host.removeFromSuperview()
+            parentSplit.insertArrangedSubview(split, at: i)
+        } else {
+            host.removeFromSuperview()
+            parent.addSubview(split)
+        }
+        split.addArrangedSubview(host)
+        split.addArrangedSubview(newHost)
+        split.adjustSubviews()
+        let half = (vertical ? split.bounds.width : split.bounds.height) / 2
+        split.setPosition(half, ofDividerAt: 0)
+        focused = pane
+        if Motion.on {
+            newHost.alphaValue = 0
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.18
+                newHost.animator().alphaValue = 1
+            }
+        }
+        DispatchQueue.main.async { [weak self] in self?.focus() }
+        onChange?()
+    }
+
+    /// Closes a pane (its shell is ended); its neighbour takes the room.
+    func close(_ pane: TerminalPane) {
+        guard let i = panes.firstIndex(where: { $0 === pane }) else { return }
+        pane.onExit = nil
+        pane.terminate()
+        panes.remove(at: i)
+        busySince[ObjectIdentifier(pane)] = nil
+        if panes.isEmpty {
+            onEmpty?()
+            return
+        }
+        if let host = pane.view.superview, let split = host.superview as? NSSplitView {
+            host.removeFromSuperview()
+            // a split left with one side is replaced by that side
+            if split.arrangedSubviews.count == 1, let only = split.arrangedSubviews.first, let outer = split.superview {
+                only.removeFromSuperview()
+                only.frame = split.frame
+                only.autoresizingMask = [.width, .height]
+                if let outerSplit = outer as? NSSplitView, let j = outerSplit.arrangedSubviews.firstIndex(of: split) {
+                    split.removeFromSuperview()
+                    outerSplit.insertArrangedSubview(only, at: j)
+                } else {
+                    split.removeFromSuperview()
+                    outer.addSubview(only)
+                }
+            }
+        }
+        if focused === pane { focused = panes[min(i, panes.count - 1)] }
+        focus()
+        onChange?()
+    }
+
+    func closeFocused() { if let f = focused { close(f) } }
+
+    /// ⌘+ / ⌘− / ⌘0: the text size of every pane (9 to 28 pt, 13 by default), remembered.
+    func zoom(_ step: Int) {
+        let now = TerminalPane.fontSize
+        let next: CGFloat = step == 0 ? 13 : min(max(now + CGFloat(step), 9), 28)
+        guard next != now else { return NSSound.beep() }
+        TerminalPane.fontSize = next
+        for p in panes { p.view.font = TerminalPane.font }
+    }
+
+    /// ⌘[ / ⌘]: the previous or next pane.
+    func cycle(_ step: Int) {
+        guard panes.count > 1, let f = focused, let i = panes.firstIndex(where: { $0 === f }) else { return }
+        focused = panes[(i + step + panes.count) % panes.count]
+        focus()
+        onChange?()
+    }
+
+    /// A click in a pane makes it the focused one.
+    func noteFocus(_ v: NSView) {
+        if let p = panes.first(where: { v === $0.view || v.isDescendant(of: $0.view) }), p !== focused {
+            focused = p
+            onChange?()
+        }
+    }
+
+    func terminateAll() {
+        timer?.invalidate()
+        for p in panes {
+            p.onExit = nil
+            p.terminate()
+        }
+        panes = []
+    }
+
+    // MARK: watching what runs (once a second, only while the tab shows or something runs)
+
+    private func updateTimer() {
+        timer?.invalidate()
+        timer = Timer.scheduledTimer(withTimeInterval: isShown ? 1 : 2, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.tick() }
+        }
+    }
+
+    private func tick() {
+        var changed = false
+        for p in panes {
+            let wasBusy = p.activity.isBusy
+            if p.refresh() { changed = true }
+            let id = ObjectIdentifier(p)
+            if p.activity.isBusy, !wasBusy { busySince[id] = Date() }
+            if !p.activity.isBusy, wasBusy {
+                // a command that ran a while and ended out of sight: the tab says so, like herdr's "done"
+                if let since = busySince[id], Date().timeIntervalSince(since) > 3, !isShown {
+                    finishedInBackground = true
+                    NSApp.requestUserAttention(.informationalRequest)
+                }
+                busySince[id] = nil
+            }
+        }
+        if changed { onChange?() }
+    }
+}
+
+/// The view a pane sits in; a click inside tells the page which pane is in front.
+private final class PaneHost: NSView {
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let v = super.hitTest(point)
+        if v != nil, NSApp.currentEvent?.type == .leftMouseDown, let page = (window?.windowController as? BrowserWindowController)?.terminalPageInFront {
+            page.noteFocus(subviews.first ?? self)
+        }
+        return v
+    }
+}

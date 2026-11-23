@@ -20,6 +20,9 @@ final class BrowserTab {
     /// Pulse Explorer's browser tabs (WebTabs.swift): a web page or an .html file, shown by `page`.
     var isWeb: Bool { WebAddress.isWeb(url) }
     var page: WebPage?
+    /// Terminal tabs (TerminalTabs.swift): a shell, shown by `term`.
+    var isTerminal: Bool { TerminalAddress.isTerminal(url) }
+    var term: TerminalPage?
 
     /// The Settings page is a place a tab goes to, like a folder (Location::Settings on Windows).
     static let settingsURL = URL(string: "rustyfiles:settings")!
@@ -28,7 +31,7 @@ final class BrowserTab {
     var isSettings: Bool { url == Self.settingsURL }
     var isHome: Bool { url == Self.homeURL }
     /// A page of the app's own rather than a folder.
-    var isPage: Bool { isSettings || isHome || isWeb }
+    var isPage: Bool { isSettings || isHome || isWeb || isTerminal }
     /// A tag's results (rustyfiles:tag/<name>): the files that have it, from anywhere.
     var tagName: String? { TagStore.name(of: url) }
     /// A search's results (rustyfiles:search?in=…&q=…, SearchPlace).
@@ -37,6 +40,7 @@ final class BrowserTab {
     var info: TabInfo {
         if isSettings { return TabInfo(title: String(localized: "Settings"), icon: "settings") }
         if isHome { return TabInfo(title: String(localized: "Home"), icon: "house") }
+        if isTerminal { return TabInfo(title: term?.title ?? String(localized: "Terminal"), icon: "square-terminal") }
         if isWeb {
             let title = page?.title ?? (url == WebAddress.blank ? String(localized: "New browser tab") : (url.isFileURL ? url.lastPathComponent : url.host ?? url.absoluteString))
             return TabInfo(title: title, icon: "globe")
@@ -172,15 +176,29 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         // no sidebar: the card keeps the 8 px margin on the left too
         let left = sidebarShown ? sw : 8
         list.card.frame = NSRect(x: left, y: top, width: b.width - left - Metrics.cardRightMargin, height: b.height - top - Metrics.bottomSpacer)
-        for t in tabs { t.page?.container.frame = list.card.frame }
+        for t in tabs {
+            t.page?.container.frame = list.card.frame
+            t.term?.container.frame = list.card.frame
+        }
     }
 
-    func windowDidBecomeKey(_ notification: Notification) { list.updateCommands() }
+    func windowDidBecomeKey(_ notification: Notification) {
+        list.updateCommands()
+        // back to a terminal tab's window: the keys go to its shell unless something else of the window has them
+        if tabs.indices.contains(active), let term = tab.term, let w = window,
+            !((w.firstResponder as? NSView)?.isDescendant(of: term.container) ?? false), !(w.firstResponder is NSTextView)
+        {
+            term.focus()
+        }
+    }
 
     /// Edit › Undo and Redo, ⌘Z and ⇧⌘Z, work on file operations (text being edited keeps its own).
     func windowWillReturnUndoManager(_ window: NSWindow) -> UndoManager? { FileUndo.shared.manager }
 
-    func windowWillClose(_ notification: Notification) { onClose?(self) }
+    func windowWillClose(_ notification: Notification) {
+        tabs.forEach { $0.term?.terminateAll() }
+        onClose?(self)
+    }
 
     /// A setting changed: the list takes what concerns it; colours redraw everywhere (and
     /// lenses find their places again, or go, when the material changed).
@@ -249,6 +267,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
             let b = MenuBuilder()
             b.add(String(localized: "New tab"), "plus", key: "t") { self?.newTab(nil) }
             b.add(String(localized: "New browser tab"), "globe", key: "t", mods: [.command, .option]) { self?.newBrowserTab(nil) }
+            b.add(String(localized: "New terminal tab"), "square-terminal", key: "`", mods: [.control]) { self?.newTerminalTab(nil) }
             return b.done()
         }
         list.onOpenWeb = { [weak self] url in self?.openTab(url, activate: true) }
@@ -333,7 +352,26 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         if let k = shownKey, k.0 != key.0 || k.1 != key.1 { Motion.crossFade(list.card) }
         shownKey = key
         // only the active tab's page shows; the card stays under it
-        for t in tabs where t !== tab { t.page?.container.isHidden = true }
+        for t in tabs where t !== tab {
+            t.page?.container.isHidden = true
+            t.term?.container.isHidden = true
+            t.term?.isShown = false
+        }
+        if tab.isTerminal {
+            let term = terminalPage(for: tab)
+            term.container.frame = list.card.frame
+            if term.container.isHidden || !term.isShown {
+                term.container.isHidden = false
+                Motion.fadeIn(term.container, duration: 0.14)
+            }
+            term.isShown = true
+            watch()
+            updateChrome()
+            term.focus()
+            // (once it is in the window and the window is key: typing goes to the shell from the first key)
+            DispatchQueue.main.async { [weak term] in term?.focus() }
+            return
+        }
         if tab.isWeb {
             let page = webPage(for: tab)
             page.container.frame = list.card.frame
@@ -374,7 +412,11 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
 
     override func newWindowForTab(_ sender: Any?) { newTab(sender) }
 
-    @objc func closeTab(_ sender: Any?) { closeTab(at: active) }
+    @objc func closeTab(_ sender: Any?) {
+        // a terminal split in panes: ⌘W closes the pane in front (the tab goes with its last one), as in Ghostty
+        if tab.isTerminal, let term = tab.term, term.panes.count > 1 { return term.closeFocused() }
+        closeTab(at: active)
+    }
 
     /// Tabs closed in this window, newest last ("Reopen closed tab", ⇧⌘T).
     private var closedTabs: [URL] = []
@@ -421,7 +463,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         saveTabState()
         let current = tabs[active]
         closedTabs += indices.map { tabs[$0].url }
-        indices.forEach { dropPage(tabs[$0]) }
+        indices.forEach { dropPage(tabs[$0]); dropTerminal(tabs[$0]) }
         tabs = keep.map { tabs[$0] }
         active = tabs.firstIndex { $0 === current } ?? min(keep.firstIndex { $0 > indices.min()! } ?? 0, tabs.count - 1)
         showTab()
@@ -434,6 +476,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         let n = tabs.count
         b.add(String(localized: "New tab"), "plus", key: "t") { [weak self] in self?.newTab(nil) }
         b.add(String(localized: "New browser tab"), "globe", key: "t", mods: [.command, .option]) { [weak self] in self?.newBrowserTab(nil) }
+        b.add(String(localized: "New terminal tab"), "square-terminal", key: "`", mods: [.control]) { [weak self] in self?.newTerminalTab(nil) }
         b.add(String(localized: "Duplicate tab"), "copy") { [weak self] in
             guard let self else { return }
             self.activate(i)
@@ -467,6 +510,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         if i == active { saveTabState() }
         closedTabs.append(tabs[i].url)
         dropPage(tabs[i])
+        dropTerminal(tabs[i])
         tabs.remove(at: i)
         if i < active || active >= tabs.count { active = max(active - 1, 0) }
         showTab()
@@ -481,6 +525,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     func navigate(to url: URL, selecting name: String? = nil) {
         let url = url.isFileURL ? url.standardizedFileURL : url
         guard url != tab.url else { return }
+        // (a terminal tab keeps its shell: a place clicked meanwhile opens in a tab of its own)
+        if tab.isTerminal, !TerminalAddress.isTerminal(url) { return openTab(url, activate: true) }
         // a page going to another page stays in its WebKit history
         if tab.isWeb, WebAddress.isWeb(url), let page = tab.page {
             tab.url = url
@@ -505,6 +551,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     private func load(_ t: BrowserTab, keepScroll: Bool = false) {
         // a tab that left its page for a folder drops the page
         if !t.isWeb, t.page != nil { dropPage(t) }
+        if !t.isTerminal, t.term != nil { dropTerminal(t) }
         t.loadID += 1
         let id = t.loadID
         let url = t.url
@@ -658,6 +705,16 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     }
 
     private func updateChrome() {
+        if tab.isTerminal {
+            let dir = tab.term?.directory ?? TerminalAddress.directory(of: tab.url) ?? URL(fileURLWithPath: NSHomeDirectory())
+            navBar.back.isEnabled = (tab.term?.panes.count ?? 0) > 1
+            navBar.forward.isEnabled = (tab.term?.panes.count ?? 0) > 1
+            navBar.up.isEnabled = false
+            navBar.omnibar.breadcrumb.segments = BreadcrumbView.segments(for: dir)
+            navBar.omnibar.currentPath = dir.path
+            sidebar.selectedURL = nil
+            return
+        }
         if tab.isWeb {
             let page = tab.page
             navBar.back.isEnabled = (page?.view.canGoBack ?? false) || !tab.back.isEmpty
@@ -737,6 +794,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     // MARK: actions (menus, buttons, keys)
 
     @objc func goBack(_ sender: Any?) {
+        if tab.isTerminal { tab.term?.cycle(-1); return }
         if tab.isWeb, let page = tab.page, page.view.canGoBack { page.view.goBack(); return }
         guard let url = tab.back.popLast() else { return }
         saveTabState()
@@ -749,6 +807,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     }
 
     @objc func goForward(_ sender: Any?) {
+        if tab.isTerminal { tab.term?.cycle(1); return }
         if tab.isWeb, let page = tab.page, page.view.canGoForward { page.view.goForward(); return }
         guard let url = tab.forward.popLast() else { return }
         saveTabState()
@@ -785,6 +844,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
 
     @objc func refresh(_ sender: Any?) {
         if tab.isHome { return list.reloadHome() }
+        if tab.isTerminal { return }
         if tab.isWeb { tab.page?.view.reload(); return }
         reload()
     }
@@ -885,9 +945,9 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     @objc func toggleQuickLook(_ sender: Any?) { list.toggleQuickLook() }
     @objc func showDetails(_ sender: Any?) { list.setViewMode(.details) }
     @objc func showTiles(_ sender: Any?) { list.setViewMode(.tiles) }
-    @objc func zoomIn(_ sender: Any?) { list.zoom(1) }
-    @objc func zoomOut(_ sender: Any?) { list.zoom(-1) }
-    @objc func zoomReset(_ sender: Any?) { list.zoom(0) }
+    @objc func zoomIn(_ sender: Any?) { if let t = tab.term { t.zoom(1) } else { list.zoom(1) } }
+    @objc func zoomOut(_ sender: Any?) { if let t = tab.term { t.zoom(-1) } else { list.zoom(-1) } }
+    @objc func zoomReset(_ sender: Any?) { if let t = tab.term { t.zoom(0) } else { list.zoom(0) } }
 
     /// Properties of the selection, or of the folder shown when nothing is selected (⌘I).
     @objc func showProperties(_ sender: Any?) { list.showProperties() }
@@ -914,6 +974,52 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
             guard let self, !self.sidebarShown, !shown else { return }
             self.sidebar.isHidden = true
         })
+    }
+
+    // MARK: terminal tabs (TerminalTabs.swift)
+
+    /// A terminal in a new tab, in the folder shown (else the home folder); ⌃` and the "+" button's menu.
+    @objc func newTerminalTab(_ sender: Any?) {
+        let dir = (tab.term?.directory) ?? (tab.url.isFileURL && !tab.isWeb ? tab.url : FileManager.default.homeDirectoryForCurrentUser)
+        openTab(TerminalAddress.url(in: dir), activate: true)
+    }
+
+    @objc func splitTerminalRight(_ sender: Any?) {
+        guard tab.isTerminal else { return newTerminalTab(sender) }
+        tab.term?.split(vertical: true)
+    }
+
+    @objc func splitTerminalDown(_ sender: Any?) {
+        guard tab.isTerminal else { return newTerminalTab(sender) }
+        tab.term?.split(vertical: false)
+    }
+
+    /// The terminal of the tab in front, if it is one (a pane's click finds its page through this).
+    var terminalPageInFront: TerminalPage? { tabs.indices.contains(active) ? tab.term : nil }
+
+    private func terminalPage(for t: BrowserTab) -> TerminalPage {
+        if let p = t.term { return p }
+        let p = TerminalPage(directory: TerminalAddress.directory(of: t.url) ?? FileManager.default.homeDirectoryForCurrentUser)
+        t.term = p
+        root.addSubview(p.container, positioned: .above, relativeTo: list.card)
+        p.onChange = { [weak self, weak t] in
+            guard let self, let t else { return }
+            // the tab's address follows the shell, so a restored session opens where it was
+            if let d = t.term?.directory { t.url = TerminalAddress.url(in: d) }
+            self.refreshTabs()
+            if t === self.tab { self.updateChrome() }
+        }
+        p.onEmpty = { [weak self, weak t] in
+            guard let self, let t, let i = self.tabs.firstIndex(where: { $0 === t }) else { return }
+            self.closeTab(at: i)
+        }
+        return p
+    }
+
+    private func dropTerminal(_ t: BrowserTab) {
+        t.term?.terminateAll()
+        t.term?.container.removeFromSuperview()
+        t.term = nil
     }
 
     // MARK: browser tabs (WebTabs.swift)
@@ -949,8 +1055,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         let selected = !list.selectedNames.isEmpty
         switch item.action {
-        case #selector(goBack(_:)): return !tab.back.isEmpty
-        case #selector(goForward(_:)): return !tab.forward.isEmpty
+        case #selector(goBack(_:)): return tab.isTerminal ? (tab.term?.panes.count ?? 0) > 1 : !tab.back.isEmpty
+        case #selector(goForward(_:)): return tab.isTerminal ? (tab.term?.panes.count ?? 0) > 1 : !tab.forward.isEmpty
         case #selector(goUp(_:)): return !tab.isWeb && tab.url.path != "/"
         case #selector(openSelection(_:)), #selector(cut(_:)), #selector(BrowserWindowController.copy(_:) as (BrowserWindowController) -> (Any?) -> Void), #selector(moveToTrash(_:)),
             #selector(toggleQuickLook(_:)):
