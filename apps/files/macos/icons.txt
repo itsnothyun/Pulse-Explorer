@@ -122,3 +122,4 @@ scan-text
 play
 inbox
 sticky-note
+bot

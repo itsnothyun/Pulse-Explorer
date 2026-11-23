@@ -10,12 +10,17 @@ import SwiftTerm
 /// the tab named after what runs in it ("claude — pulse") or its folder; and a mark on a tab whose long command finished
 /// while you were elsewhere. The shell's folder and foreground program are read from the kernel (ProcessInspect).
 enum TerminalAddress {
-    nonisolated static func url(in dir: URL) -> URL {
+    /// `id` names the tab across restarts (its saved scrollback, TerminalHistory).
+    nonisolated static func url(in dir: URL, id: String = UUID().uuidString) -> URL {
         var c = URLComponents()
         c.scheme = "rustyfiles"
         c.path = "terminal"
-        c.queryItems = [URLQueryItem(name: "cwd", value: dir.path)]
+        c.queryItems = [URLQueryItem(name: "cwd", value: dir.path), URLQueryItem(name: "id", value: id)]
         return c.url!
+    }
+
+    nonisolated static func id(of url: URL) -> String? {
+        URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "id" })?.value
     }
 
     nonisolated static func directory(of url: URL) -> URL? {
@@ -30,17 +35,23 @@ enum TerminalAddress {
 /// One pane: a SwiftTerm view running a login shell, in Pulse's colours.
 @MainActor
 final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
-    let view: LocalProcessTerminalView
+    let view: PulseTerminalView
+    let id = UUID().uuidString
+    /// What it is doing (AgentStatus), updated by its page.
+    var status: AgentStatus = .idle
+    /// Output saved when the tab was last open, shown before the new shell (TerminalHistory).
+    var restore: Data?
     var onExit: ((TerminalPane) -> Void)?
     var onTitle: (() -> Void)?
     private(set) var shellTitle: String?
     private(set) var activity = ProcessInspect.Activity(program: nil, directory: nil)
 
     init(directory: URL) {
-        view = LocalProcessTerminalView(frame: NSRect(x: 0, y: 0, width: 600, height: 400))
+        view = PulseTerminalView(frame: NSRect(x: 0, y: 0, width: 600, height: 400))
         self.directory = directory
         super.init()
         view.processDelegate = self
+        view.directory = { [weak self] in self?.activity.directory.map { URL(fileURLWithPath: $0) } ?? self?.directory }
         view.optionAsMetaKey = false  // Option types the Mac's characters (é, ñ, …), as in Ghostty's default
         view.font = Self.font
         apply(dark: true, text: NSColor(red: 0.949, green: 0.949, blue: 0.929, alpha: 1))
@@ -69,7 +80,12 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
                 let prompt = self.boxPrompt
                 info.tryBox = !prompt
                 self.suggestion = TerminalWelcome.suggestion(info)
-                if welcome {
+                if let saved = self.restore {
+                    // a tab that comes back: what it showed, then a quiet line, then the new shell
+                    self.view.feed(byteArray: [UInt8](ScrollbackRing.replay(saved))[...])
+                    self.view.feed(text: "\r\n\u{1B}[38;2;124;124;121m── restored · \(DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .short)) ──\u{1B}[0m\r\n")
+                    self.restore = nil
+                } else if welcome {
                     let card = TerminalWelcome.render(info, cols: cols)
                     self.view.feed(text: card)
                     // the pulse line draws itself in (when the card has room to stay where it is)
@@ -109,8 +125,11 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         }
     }
 
+    /// Settings › Terminal › Shell (a path), else the user's login shell ($SHELL), else zsh.
     static var shell: String {
-        ProcessInfo.processInfo.environment["SHELL"].flatMap { FileManager.default.isExecutableFile(atPath: $0) ? $0 : nil } ?? "/bin/zsh"
+        let chosen = UserDefaults.standard.string(forKey: "terminalShell") ?? ""
+        if !chosen.isEmpty, FileManager.default.isExecutableFile(atPath: chosen) { return chosen }
+        return ProcessInfo.processInfo.environment["SHELL"].flatMap { FileManager.default.isExecutableFile(atPath: $0) ? $0 : nil } ?? "/bin/zsh"
     }
 
     /// Pulse's zsh files (ShellIntegration), written fresh in Application Support.
@@ -154,6 +173,9 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
             env["PULSE_USER_ZDOTDIR"] = env["ZDOTDIR"] ?? NSHomeDirectory()
             env["ZDOTDIR"] = zdot.path
             env["PULSE_TRY"] = suggestion
+            if let extra = UserDefaults.standard.string(forKey: "terminalExtraAgents"), !extra.isEmpty {
+                env["PULSE_EXTRA_AGENTS"] = [env["PULSE_EXTRA_AGENTS"], extra].compactMap { $0 }.joined(separator: " ")
+            }
         }
         let cwd = FileManager.default.fileExists(atPath: dir.path) ? dir.path : NSHomeDirectory()
         view.startProcess(executable: shell, args: ["-l"], environment: env.map { "\($0.key)=\($0.value)" },
@@ -218,8 +240,13 @@ final class TerminalPage {
 
     private var timer: Timer?
     private var busySince: [ObjectIdentifier: Date] = [:]
+    /// The tab's id (TerminalAddress), for its saved scrollback.
+    let id: String
+    /// The tab's title in the window, for notifications.
+    var tabTitle: () -> String = { "" }
 
-    init(directory: URL) {
+    init(directory: URL, id: String = UUID().uuidString) {
+        self.id = id
         // a real size from the start: panes laid out in a zero-sized view get a null frame and never stretch
         container.frame = NSRect(x: 0, y: 0, width: 900, height: 560)
         container.wantsLayer = true
@@ -232,6 +259,7 @@ final class TerminalPage {
             self.applyLook(Palette.of(self.container))
         }
         let pane = makePane(in: directory)
+        pane.restore = TerminalHistory.load(id: id)
         let host = paneHost(pane.view)
         host.frame = container.bounds
         host.autoresizingMask = [.width, .height]
@@ -240,8 +268,29 @@ final class TerminalPage {
         updateTimer()
     }
 
-    var title: String { (finishedInBackground ? "● " : "") + (focused?.title ?? "Terminal") }
+    /// The tab's title: a mark for the most pressing pane (◐ an agent waits, ◌ one works, ● a command finished out of
+    /// sight), then what the focused pane shows.
+    var title: String {
+        let mark = panes.contains { $0.status == .waiting } ? AgentStatus.waiting.mark
+            : panes.contains { $0.status == .working } ? AgentStatus.working.mark
+            : finishedInBackground ? "● " : ""
+        return mark + (focused?.title ?? "Terminal")
+    }
+
+    /// The tab's output for next time (the first pane's; panes split off start fresh).
+    func saveHistory() {
+        guard let first = panes.first else { return }
+        TerminalHistory.save(first.view.ring.bytes, id: id)
+    }
+
+    func focus(_ pane: TerminalPane) {
+        guard panes.contains(where: { $0 === pane }) else { return }
+        focused = pane
+        focus()
+        onChange?()
+    }
     var directory: URL? { focused?.activity.directory.map { URL(fileURLWithPath: $0) } }
+    var focusedView: PulseTerminalView? { focused?.view }
 
     /// Starts the panes that are waiting (a new tab once it shows, a new split once it has its size).
     func beginPending() {
@@ -260,6 +309,7 @@ final class TerminalPage {
         let p = TerminalPane(directory: dir)
         if let look { p.apply(dark: look.dark, text: look.text) }
         p.onExit = { [weak self] pane in self?.close(pane) }
+        p.view.onOpenFolder = { url in AppDelegate.shared.frontController?.openTab(url, activate: true) }
         p.onTitle = { [weak self] in self?.onChange?() }
         panes.append(p)
         return p
@@ -384,6 +434,7 @@ final class TerminalPage {
 
     func terminateAll() {
         timer?.invalidate()
+        TerminalRegistry.shared.remove(self)
         for p in panes {
             p.onExit = nil
             p.terminate()
@@ -402,9 +453,25 @@ final class TerminalPage {
 
     private func tick() {
         var changed = false
+        let extra = Set((UserDefaults.standard.string(forKey: "terminalExtraAgents") ?? "").split(separator: " ").map { $0.lowercased() })
+        let quietAfter = max(UserDefaults.standard.double(forKey: "terminalAgentQuietSeconds"), 0) == 0 ? 3 : UserDefaults.standard.double(forKey: "terminalAgentQuietSeconds")
         for p in panes {
             let wasBusy = p.activity.isBusy
             if p.refresh() { changed = true }
+            // agent status: working while it draws, waiting when it goes quiet or rings
+            let rang = p.view.lastBell.map { Date().timeIntervalSince($0) < 4 } ?? false
+            let status = AgentStatus.of(program: p.activity.program, quietFor: Date().timeIntervalSince(p.view.lastOutput), rang: rang, quietAfter: quietAfter, extra: extra)
+            if status != p.status {
+                let old = p.status
+                p.status = status
+                changed = true
+                // an agent stopped to ask, out of sight: a notification and a bounce
+                let inFront = isShown && (container.window?.isKeyWindow ?? false) && NSApp.isActive
+                if status.notifies(from: old), !inFront {
+                    AgentNotifier.notify(p, tabTitle: tabTitle())
+                    NSApp.requestUserAttention(.informationalRequest)
+                }
+            }
             let id = ObjectIdentifier(p)
             if p.activity.isBusy, !wasBusy { busySince[id] = Date() }
             if !p.activity.isBusy, wasBusy {

@@ -1,4 +1,5 @@
 import AppKit
+import UserNotifications
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -41,6 +42,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         watchZoomKeys()
+        TerminalHistory.prune()
+        UNUserNotificationCenter.current().delegate = self
         // Sizes and dates in rf-core's English wording until the interface is translated.
         // sizes and dates speak the interface's language ("bayt", decimal comma)
         setEnglish(on: !AppSettings.speaksTurkish)
@@ -120,6 +123,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        controllers.forEach { $0.saveTerminalHistories() }
         saveSession()
         FerryService.shared.stop()
     }
@@ -233,5 +237,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func newWindow(_ sender: Any?) {
         let key = NSApp.keyWindow?.windowController as? BrowserWindowController
         openWindow(at: key?.current ?? home)
+    }
+}
+
+// A click on "an agent is waiting" brings its pane to the front; shown even while Pulse is in front (another tab).
+extension AppDelegate: @preconcurrency UNUserNotificationCenterDelegate {
+    func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler done: @escaping () -> Void) {
+        if let pane = response.notification.request.content.userInfo["pane"] as? String { TerminalRegistry.shared.reveal(paneID: pane) }
+        done()
+    }
+
+    func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification, withCompletionHandler done: @escaping (UNNotificationPresentationOptions) -> Void) {
+        done([.banner, .sound])
     }
 }

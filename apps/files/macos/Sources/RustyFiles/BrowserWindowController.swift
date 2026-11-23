@@ -196,7 +196,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     func windowWillReturnUndoManager(_ window: NSWindow) -> UndoManager? { FileUndo.shared.manager }
 
     func windowWillClose(_ notification: Notification) {
-        tabs.forEach { $0.term?.terminateAll() }
+        tabs.forEach { $0.term?.saveHistory(); $0.term?.terminateAll() }
         onClose?(self)
     }
 
@@ -917,7 +917,9 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         navBar.statusCenter.iconSize = sc.isBusy ? 14 : 16
         navBar.statusCenter.needsDisplay = true
     }
-    @objc func focusSearch(_ sender: Any?) { navBar.omnibar.mode == .filter ? navBar.omnibar.end() : navBar.omnibar.begin(.filter) }
+    @objc func focusSearch(_ sender: Any?) {
+        if tab.isTerminal { return findInTerminal() }
+        navBar.omnibar.mode == .filter ? navBar.omnibar.end() : navBar.omnibar.begin(.filter) }
     @objc func focusAddress(_ sender: Any?) { navBar.omnibar.begin(.path) }
     /// ⌘K: every command and place, by typing (CommandPalette.swift).
     @objc func showCommandPalette(_ sender: Any?) { CommandPalette.toggle(for: self) }
@@ -1002,19 +1004,46 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         tab.term?.split(vertical: false)
     }
 
+    /// Every terminal's output kept for next time (Pulse quitting).
+    func saveTerminalHistories() { tabs.forEach { $0.term?.saveHistory() } }
+
+    /// Brings `page`'s tab to the front (the Agents panel, a notification).
+    func showTerminal(_ page: TerminalPage) {
+        guard let i = tabs.firstIndex(where: { $0.term === page }) else { return }
+        activate(i)
+    }
+
+    /// A terminal in a new tab at `dir` ("Open terminal here").
+    func openTerminal(at dir: URL) { openTab(TerminalAddress.url(in: dir), activate: true) }
+
+    @objc func showAgents(_ sender: Any?) { AgentsPanel.shared.toggle() }
+
+    /// The terminal tab's find bar (⌘F in a terminal: search its scrollback).
+    private func findInTerminal() {
+        guard let view = tab.term?.focusedView else { return }
+        let item = NSMenuItem()
+        item.tag = Int(NSFindPanelAction.showFindPanel.rawValue)
+        view.performFindPanelAction(item)
+    }
+
     /// The terminal of the tab in front, if it is one (a pane's click finds its page through this).
     var terminalPageInFront: TerminalPage? { tabs.indices.contains(active) ? tab.term : nil }
 
     private func terminalPage(for t: BrowserTab) -> TerminalPage {
         if let p = t.term { return p }
-        let p = TerminalPage(directory: TerminalAddress.directory(of: t.url) ?? FileManager.default.homeDirectoryForCurrentUser)
+        let dir = TerminalAddress.directory(of: t.url) ?? FileManager.default.homeDirectoryForCurrentUser
+        let id = TerminalAddress.id(of: t.url) ?? UUID().uuidString
+        t.url = TerminalAddress.url(in: dir, id: id)
+        let p = TerminalPage(directory: dir, id: id)
         t.term = p
+        TerminalRegistry.shared.add(p, in: self)
+        p.tabTitle = { [weak t] in t?.info.title ?? "" }
         root.addSubview(p.container, positioned: .above, relativeTo: list.card)
         p.applyLook(Palette.of(list.card))
         p.onChange = { [weak self, weak t] in
             guard let self, let t else { return }
             // the tab's address follows the shell, so a restored session opens where it was
-            if let d = t.term?.directory { t.url = TerminalAddress.url(in: d) }
+            if let d = t.term?.directory, let id = t.term?.id { t.url = TerminalAddress.url(in: d, id: id) }
             self.refreshTabs()
             if t === self.tab { self.updateChrome() }
         }
@@ -1025,7 +1054,12 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         return p
     }
 
-    private func dropTerminal(_ t: BrowserTab) {
+    /// Ends a tab's shells. `keepHistory`: its output stays saved for a restart (a window closing); a tab closed by the
+    /// user forgets it.
+    private func dropTerminal(_ t: BrowserTab, keepHistory: Bool = false) {
+        if let term = t.term {
+            if keepHistory { term.saveHistory() } else { TerminalHistory.remove(id: term.id) }
+        }
         t.term?.terminateAll()
         t.term?.container.removeFromSuperview()
         t.term = nil

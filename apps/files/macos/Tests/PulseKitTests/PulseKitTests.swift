@@ -640,3 +640,48 @@ extension ProcessInspectTests {
         XCTAssertFalse(ProcessInspect.looksLikeVersion("python3.12"))
     }
 }
+
+// MARK: - agent status, bell, scrollback
+
+final class AgentStatusTests: XCTestCase {
+    func testStatusFromProgramOutputAndBell() {
+        XCTAssertEqual(AgentStatus.of(program: nil, quietFor: 99, rang: true), .idle)
+        XCTAssertEqual(AgentStatus.of(program: "npm", quietFor: 99, rang: false), .running)
+        XCTAssertEqual(AgentStatus.of(program: "claude", quietFor: 0.4, rang: false), .working)
+        XCTAssertEqual(AgentStatus.of(program: "claude", quietFor: 5, rang: false), .waiting)
+        XCTAssertEqual(AgentStatus.of(program: "codex", quietFor: 0.1, rang: true), .waiting, "the bell means it asks")
+        XCTAssertEqual(AgentStatus.of(program: "gemini-cli", quietFor: 9, rang: false), .waiting)
+        XCTAssertEqual(AgentStatus.of(program: "mybot", quietFor: 9, rang: false, extra: ["mybot"]), .waiting)
+        XCTAssertTrue(AgentStatus.waiting.notifies(from: .working))
+        XCTAssertFalse(AgentStatus.waiting.notifies(from: .waiting))
+        XCTAssertFalse(AgentStatus.idle.notifies(from: .working))
+    }
+
+    func testTheShellAndTheAppKnowTheSameAgents() {
+        // ShellIntegration's PULSE_AGENTS list and AgentStatus.agentNames must agree
+        let shell = ShellIntegration.zshFiles()[".zshrc"]!
+        for name in AgentStatus.agentNames { XCTAssertTrue(shell.contains(" \(name) ") || shell.contains("( \(name) ") || shell.contains(" \(name) $"), name) }
+    }
+
+    func testBellScannerIgnoresTheBellThatEndsAnOSC() {
+        var s = BellScanner()
+        XCTAssertFalse(s.scan(Array("\u{1B}]0;title\u{07}text".utf8)), "a title ends in BEL: no bell")
+        XCTAssertTrue(s.scan(Array("done\u{07}".utf8)))
+        XCTAssertFalse(s.scan(Array("\u{1B}]7;file://h/x\u{1B}\\".utf8)), "ST-terminated OSC")
+        // an OSC split across two reads
+        XCTAssertFalse(s.scan(Array("\u{1B}]0;long ti".utf8)))
+        XCTAssertFalse(s.scan(Array("tle\u{07}".utf8)))
+        XCTAssertTrue(s.scan([0x07]))
+    }
+
+    func testScrollbackRingKeepsTheTailFromALineStart() {
+        var r = ScrollbackRing(capacity: 20)
+        r.append(Array("line one\nline two\nline three\n".utf8))
+        let s = String(decoding: r.bytes, as: UTF8.self)
+        XCTAssertLessThanOrEqual(r.bytes.count, 20)
+        XCTAssertTrue(s.hasPrefix("line"), s)
+        XCTAssertTrue(s.hasSuffix("line three\n"), s)
+        let replay = String(decoding: ScrollbackRing.replay(Data("a\u{1B}[?1049hfull\u{1B}[?1049lb".utf8)), as: UTF8.self)
+        XCTAssertEqual(replay, "afullb\u{1B}[0m")
+    }
+}

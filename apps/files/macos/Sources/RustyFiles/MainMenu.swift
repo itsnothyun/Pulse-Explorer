@@ -146,6 +146,7 @@ enum MainMenu {
         m.addItem(item(String(localized: "Zoom"), #selector(NSWindow.performZoom(_:))))
         m.addItem(.separator())
         m.addItem(item(String(localized: "Shelf"), #selector(W.toggleShelf(_:)), "j", [.command, .shift]))
+        m.addItem(item(String(localized: "Agents"), #selector(W.showAgents(_:)), "a", [.command, .option]))
         m.addItem(.separator())
         m.addItem(item(String(localized: "Next Tab"), #selector(W.selectNextTab(_:)), "\t", .control))
         m.addItem(item(String(localized: "Previous Tab"), #selector(W.selectPreviousTab(_:)), "\t", [.control, .shift]))

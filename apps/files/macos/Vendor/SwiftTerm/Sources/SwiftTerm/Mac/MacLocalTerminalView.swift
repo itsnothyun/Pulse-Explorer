@@ -187,7 +187,11 @@ private final class LocalProcessTerminalViewProcessAdapter:
         }
     }
 
+    /// Pulse Explorer change (VENDORED.md): the raw output bytes, handed to the host on the parse thread before parsing.
+    let bytesTap = Locked<(@Sendable (ArraySlice<UInt8>) -> Void)?>(nil)
+
     func dataReceived(slice: ArraySlice<UInt8>) {
+        if let tap = bytesTap.withLock({ $0 }) { tap(slice) }
         frameSignal.markDirty()
         let parse = Profiling.begin(.ioParse, "bytes=%d", slice.count)
         _ = renderOwner.feed(bytes: slice)
@@ -201,6 +205,12 @@ private final class LocalProcessTerminalViewProcessAdapter:
     }
 
     func dataReceivedBorrowed(_ bytes: Span<UInt8>) {
+        if let tap = bytesTap.withLock({ $0 }) {
+            var copy = [UInt8]()
+            copy.reserveCapacity(bytes.count)
+            for i in 0..<bytes.count { copy.append(bytes[i]) }
+            tap(copy[...])
+        }
         frameSignal.markDirty()
         let parse = Profiling.begin(.ioParse, "bytes=%d", bytes.count)
         _ = renderOwner.feed(borrowedBytes: bytes)
@@ -303,6 +313,12 @@ open class LocalProcessTerminalView: TerminalView, TerminalViewDelegate {
     /// and must return quickly.
     public func setProcessOutputHandler(_ handler: (@Sendable () -> Void)?) {
         processOutputHandler.replace(with: handler)
+    }
+
+    /// Pulse Explorer change (VENDORED.md): receives every batch of the process's raw output on the parse thread, before
+    /// it is parsed. Must return quickly and not touch the view.
+    public func setProcessBytesHandler(_ handler: (@Sendable (ArraySlice<UInt8>) -> Void)?) {
+        processAdapter?.bytesTap.withLock { $0 = handler }
     }
     
     /**

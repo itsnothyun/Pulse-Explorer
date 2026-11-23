@@ -4940,8 +4940,12 @@ open class TerminalView: NSView, NSUserInterfaceValidations, TerminalDelegate {
         }
     }
 
+    /// Pulse Explorer change (VENDORED.md): told of every bell the policy lets through, whatever the bell style.
+    public var bellHandler: (() -> Void)?
+
     private func deliverBell () {
         guard bellPolicy.shouldDeliver() else { return }
+        bellHandler?()
         switch bellStyle {
         case .none:
             break

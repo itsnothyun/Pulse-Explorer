@@ -93,6 +93,9 @@ enum PulseFeatureMenus {
                 s.add(String(localized: "Compress for email")) { imageTool(.compress(maxSide: 2048), images, list: list) }
             }
         }
+        if urls.count == 1, (try? urls[0].resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
+            b.add(String(localized: "Open terminal here"), "square-terminal") { AppDelegate.shared.frontController?.openTerminal(at: urls[0]) }
+        }
         if urls.count == 1, ProjectScripts.handles(urls[0]) {
             let scripts = ProjectScripts.scripts(in: urls[0])
             b.sub(String(localized: "Run script"), "play") { s in
@@ -121,6 +124,7 @@ enum PulseFeatureMenus {
         b.add(note == nil ? String(localized: "Add a note…") : String(localized: "Edit note…"), "sticky-note") {
             NoteEditor.edit(dir, in: window) { list.refreshNote() }
         }
+        b.add(String(localized: "Open terminal here"), "square-terminal") { AppDelegate.shared.frontController?.openTerminal(at: dir) }
         b.add(String(localized: "What’s taking space here…"), "hard-drive") { DiskLensWindow.show(dir) }
         b.add(String(localized: "Changed today"), "clock") { AppDelegate.shared.frontController?.navigate(to: TodayPlace.url(in: dir)) }
     }

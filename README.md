@@ -80,6 +80,17 @@ Pulse's build changes the look and the wiring, not the file manager itself:
 
 To pull upstream changes: `git subtree pull --prefix=apps/files https://github.com/gelenmedya/rustyfiles main --squash`
 
+## ✦ On the Mac
+
+The Mac build uses rustyfiles' native Mac app (`apps/files/macos`, Swift) as the file manager, inside the Tauri shell that hosts Quick View. Install it with `pnpm desktop:install:mac` (builds, puts it in `/Applications`, and removes every intermediate copy so macOS lists only one).
+
+- **Terminal tabs** (`⌃\``, or the **+** button's menu, or *Open terminal here* on a folder): your login shell in the folder you were in, on [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm) (MIT, vendored in `apps/files/macos/Vendor/SwiftTerm`, see its `VENDORED.md`). A welcome card with the **PULSE** wordmark, an animated pulse line, the folder's Git state and its scripts; zsh's default prompt drawn as the card's input box. Panes: `⌘D` right, `⇧⌘D` down, `⌘[` `⌘]` move, `⌘W` close. `⌘F` searches the scrollback; `⌘`-click a path in the output opens it in Pulse; drop files to paste their quoted paths. Tabs come back after a restart with their scrollback.
+- **Agents**: Claude Code, Antigravity, Codex, Gemini, OpenCode and others get a clean screen when they start. Their tab shows ◌ while they work and ◐ when they wait for you (quiet for a few seconds, or the bell); a notification tells you when one in a background tab waits. *Window › Agents* (`⌥⌘A`) lists every terminal with its state.
+- **Everyday tools**: copy text from pictures and scanned PDFs, paste the clipboard as a file, what's taking space (big unused files and duplicates), image convert/resize/compress, folder notes, the Shelf, saved workspaces, run a project's scripts, changed today, batch rename, search subfolders, the command palette (`⌘K`), Git and path tools.
+- **Settings › Terminal**: text size, welcome card, box prompt, shell, agent notifications and timing, extra agent names, scrollback.
+
+Proof screenshots and stress results: [`docs/proof/2026-11-24-terminal`](docs/proof/2026-11-24-terminal/README.md). The Mac app's logic is tested with `swift test` in `apps/files/macos` (51 tests); the Windows app is built by CI (`.github/workflows/build.yml`).
+
 ## ✦ Quick start
 
 **Prerequisites**

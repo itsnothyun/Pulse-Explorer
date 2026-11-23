@@ -13,3 +13,6 @@ Pulse's own changes to this copy, if any, are listed below so an update from ups
 ## Pulse changes
 
 - `Package.swift` rewritten to the library only (above).
+- `Mac/MacLocalTerminalView.swift`: `setProcessBytesHandler(_:)` (and the adapter's `bytesTap`) hands the raw output
+  bytes to the host before parsing, for Pulse's agent status and kept scrollback.
+- `Mac/MacTerminalView.swift`: `bellHandler`, told of every bell (whatever `bellStyle`), for agent status.
