@@ -461,7 +461,8 @@ final class TerminalWelcomeTests: XCTestCase {
         let widths = Set(card.map(\.count))
         XCTAssertEqual(widths.count, 1, "every row of the card is as wide as its top: \(widths)")
         XCTAssertTrue(lines[0].hasPrefix("╭─ Pulse "))
-        XCTAssertTrue(lines.contains { $0.contains("Pulse Explorer") })
+        XCTAssertTrue(lines.contains { $0.contains("█▀▀▀▄ █   █ █     ▄▀▀▀▀ █▀▀▀▀") }, "the PULSE wordmark")
+        XCTAssertTrue(lines.contains { $0.contains("E X P L O R E R") })
         XCTAssertTrue(lines.contains { $0.contains("~/dev/pulse-explorer") })
         XCTAssertTrue(lines.contains { $0.contains("⎇ feat/macos-desktop ↑1 · 3 changed") })
         XCTAssertTrue(lines.contains { $0.contains("pnpm run build") })
@@ -490,5 +491,95 @@ final class TerminalWelcomeTests: XCTestCase {
         var light = info
         light.dark = false
         XCTAssertNotEqual(TerminalWelcome.render(light, cols: 120), raw, "the light theme has its own colours")
+    }
+}
+
+// MARK: - Pulse's zsh prompt
+
+final class ShellIntegrationTests: TempDirTestCase {
+    /// An interactive login zsh with Pulse's ZDOTDIR and `home` as $HOME; returns what `script` prints.
+    func zsh(_ script: String, home: URL, env extra: [String: String] = [:]) throws -> String {
+        let shim = try ShellIntegration.install(in: dir.appendingPathComponent("shim"))
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        p.arguments = ["-l", "-i", "-c", script]
+        var env = ["HOME": home.path, "ZDOTDIR": shim.path, "TERM": "xterm-256color", "PATH": "/usr/bin:/bin", "COLUMNS": "120"]
+        extra.forEach { env[$0.key] = $0.value }
+        p.environment = env
+        let out = Pipe()
+        p.standardOutput = out
+        p.standardError = FileHandle.nullDevice
+        try p.run()
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    func home(_ zshrc: String?) throws -> URL {
+        let h = dir.appendingPathComponent("home-\(UUID().uuidString.prefix(6))")
+        try FileManager.default.createDirectory(at: h, withIntermediateDirectories: true)
+        try "export FROM_ZSHENV=1\n".write(to: h.appendingPathComponent(".zshenv"), atomically: true, encoding: .utf8)
+        if let zshrc { try zshrc.write(to: h.appendingPathComponent(".zshrc"), atomically: true, encoding: .utf8) }
+        return h
+    }
+
+    func testTheDefaultPromptBecomesTheBoxAndTheUsersFilesStillRun() throws {
+        let out = try zsh(#"_pulse_precmd; print -r -- "active=$PULSE_PROMPT_ACTIVE env=$FROM_ZSHENV rc=$FROM_ZSHRC zd=$ZDOTDIR"; print -r -- "$PROMPT""#,
+                          home: try home("export FROM_ZSHRC=1\n"))
+        XCTAssertTrue(out.contains("active=1"), out)
+        XCTAssertTrue(out.contains("env=1 rc=1"), "the user's .zshenv and .zshrc ran: \(out)")
+        XCTAssertTrue(out.contains("╭─"), out)
+        XCTAssertTrue(out.contains("│%f %B❯%b"), out)
+        XCTAssertTrue(out.contains("zd=") && !out.contains("/shim"), "ZDOTDIR is the user's again: \(out)")
+    }
+
+    func testAPromptOfTheUsersOwnIsLeftAlone() throws {
+        let out = try zsh(#"print -r -- "active=${PULSE_PROMPT_ACTIVE:-0} prompt=$PROMPT""#, home: try home("PROMPT='mine> '\n"))
+        XCTAssertTrue(out.contains("active=0 prompt=mine> "), out)
+    }
+
+    func testItCanBeTurnedOff() throws {
+        let out = try zsh(#"print -r -- "active=${PULSE_PROMPT_ACTIVE:-0}""#, home: try home(nil), env: ["PULSE_PROMPT": "0"])
+        XCTAssertTrue(out.contains("active=0"), out)
+    }
+
+    func testTheBoxIsAsWideAsTheCard() throws {
+        // the top edge: "╭─" + head + fill + "╮" = PULSE_W = min(COLUMNS - 2, 100)
+        let out = try zsh(#"_pulse_precmd; print -r -- "w=$PULSE_W"; print -rP -- "${PROMPT%%$'\n'*}""#, home: try home(nil))
+        XCTAssertTrue(out.contains("w=100"), out)
+        let top = out.split(separator: "\n").first { $0.contains("╭─") }.map { String($0).replacingOccurrences(of: "\u{1B}\\[[0-9;]*m", with: "", options: .regularExpression) }
+        XCTAssertEqual(top?.count, 100, top ?? out)
+        XCTAssertEqual(top?.last, "╮")
+    }
+}
+
+extension TerminalWelcomeTests {
+    func testTheTryBoxGoesWhenThePromptIsTheBox() {
+        var i = info
+        i.tryBox = false
+        let lines = TerminalWelcome.plain(i, cols: 120)
+        XCTAssertFalse(lines.contains { $0.contains("Try \"") })
+        XCTAssertTrue(lines.last?.contains("⌘K for commands") == true)
+    }
+
+    func testAnimationFramesRedrawOnlyTheArtInPlace() throws {
+        let frames = TerminalWelcome.frames(info, cols: 120)
+        XCTAssertGreaterThan(frames.count, 10)
+        XCTAssertTrue(TerminalWelcome.frames(info, cols: 60).isEmpty, "no animation in the compact card")
+        let at = try XCTUnwrap(TerminalWelcome.artPlacement(cols: 120))
+        // the art's rows in the static card are where the frames draw
+        let lines = TerminalWelcome.plain(info, cols: 120)
+        XCTAssertTrue(lines[at.row - 1].contains(TerminalWelcome.art[0].trimmingCharacters(in: .whitespaces)), lines[at.row - 1])
+        let col = lines[at.row - 1 + 7].distance(from: lines[at.row - 1 + 7].startIndex,
+                                                  to: lines[at.row - 1 + 7].range(of: "...:!!:::!")!.lowerBound) + 1
+        XCTAssertEqual(col, at.col, "frames start at the art's column")
+        for f in frames {
+            XCTAssertTrue(f.hasPrefix("\u{1B}7") && f.hasSuffix("\u{1B}8"), "the cursor is saved and put back")
+            XCTAssertEqual(f.components(separatedBy: "\u{1B}[").filter { $0.contains("H") && $0.first?.isNumber == true }.count >= TerminalWelcome.art.count, true)
+        }
+        // the first frame has drawn nearly nothing; the last is the whole line at rest
+        let strip = { (f: String) in f.replacingOccurrences(of: "\u{1B}(\\[[0-9;]*[mH]|7|8)", with: "", options: .regularExpression) }
+        XCTAssertLessThan(strip(frames[0]).filter { $0 != " " }.count, 10)
+        XCTAssertEqual(strip(frames.last!), TerminalWelcome.art.joined())
     }
 }

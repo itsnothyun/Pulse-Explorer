@@ -16,6 +16,8 @@ public enum TerminalWelcome {
         public var commands: [String] = []
         public var home: String = NSHomeDirectory()
         public var dark = true
+        /// The "> Try …" box under the card; off when the shell's own prompt is drawn as that box (ShellIntegration).
+        public var tryBox = true
 
         public init(folder: String, items: Int? = nil, branch: String? = nil, changed: Int = 0, ahead: Int = 0, behind: Int = 0,
                     commands: [String] = [], home: String = NSHomeDirectory(), dark: Bool = true) {
@@ -31,8 +33,18 @@ public enum TerminalWelcome {
         }
     }
 
+    /// "PULSE" in Pulse Pixel (the 5×7 glyphs of packages/ui/src/glyphs.ts), two pixel rows to a line in half blocks.
+    public static let wordmark: [String] = [
+        "█▀▀▀▄ █   █ █     ▄▀▀▀▀ █▀▀▀▀",
+        "█▄▄▄▀ █   █ █     ▀▄▄▄  █▄▄▄",
+        "█     █   █ █         █ █",
+        "▀      ▀▀▀  ▀▀▀▀▀ ▀▀▀▀  ▀▀▀▀▀",
+    ]
+
     /// Pulse's icon (the pulse line), drawn from icons/icon.png at 30 × 12.
-    public static let art: [String] = [
+    public static let art: [String] = Self.artRows.map { $0.padding(toLength: 30, withPad: " ", startingAt: 0) }
+
+    static let artRows: [String] = [
         "              **",
         "              #*=*",
         "              #*##",
@@ -67,9 +79,10 @@ public enum TerminalWelcome {
         let leftW = 34
         let rightW = width - 7 - leftW          // a row: "│ " + left + " │ " + right + " │"
         var left: [String] = [""]
-        left.append(center(s.title("Pulse Explorer"), visible: 14, width: leftW))
+        for w in wordmark { left.append(center(s.title(w), visible: 30, width: leftW).replacingOccurrences(of: "\u{1B}[1m", with: "")) }
+        left.append(center(s.dim("E X P L O R E R"), visible: 15, width: leftW))
         left.append("")
-        for a in art { left.append(center(s.art(a), visible: a.count, width: leftW)) }
+        for a in art { left.append(center(s.art(a), visible: 30, width: leftW)) }
         left.append("")
         let place = shortPath(info.folder, home: info.home, max: leftW - 2)
         left.append(center(s.dim(place), visible: place.count, width: leftW))
@@ -113,7 +126,7 @@ public enum TerminalWelcome {
                 + String(repeating: " ", count: max(0, rightW - rv)) + s.border(" │"))
         }
         out.append(s.border("╰" + String(repeating: "─", count: width - 2) + "╯"))
-        out += tryBox(info, width: width, s: s)
+        out += info.tryBox ? tryBox(info, width: width, s: s) : [" " + s.dim("⌘K for commands · ⌃` new terminal")]
         return out
     }
 
@@ -133,7 +146,7 @@ public enum TerminalWelcome {
         var out = [s.border("╭" + String(repeating: "─", count: width - 2) + "╮")]
         for (t, v) in body { out.append(s.border("│ ") + t + String(repeating: " ", count: max(0, inner - v)) + s.border(" │")) }
         out.append(s.border("╰" + String(repeating: "─", count: width - 2) + "╯"))
-        out += tryBox(info, width: width, s: s)
+        if info.tryBox { out += tryBox(info, width: width, s: s) }
         return out
     }
 
@@ -145,7 +158,7 @@ public enum TerminalWelcome {
 
     /// The "> Try …" line in its own box, and the hint under it.
     static func tryBox(_ info: Info, width: Int, s: Style) -> [String] {
-        let suggestion = info.commands.first ?? (info.branch != nil ? "git status" : "ls -la")
+        let suggestion = Self.suggestion(info)
         let inner = width - 4
         let text = clip("Try \"\(suggestion)\"", inner - 4)
         return [
@@ -155,6 +168,49 @@ public enum TerminalWelcome {
             " " + s.dim("⌘K for commands · ⌃` new terminal"),
         ]
     }
+
+    // MARK: the pulse line, animated
+
+    /// Where the art sits in the full card: its first screen row (1-based, the card starting at row `top`) and column.
+    public static func artPlacement(cols: Int, top: Int = 1) -> (row: Int, col: Int)? {
+        guard cols >= 80 else { return nil }
+        let leftW = 34
+        // card row 0 is the top edge; the left column: blank, 4 wordmark rows, EXPLORER, blank, then the art
+        return (top + 1 + 7, 3 + (leftW - 30) / 2)
+    }
+
+    /// The pulse line drawn in, as a heart monitor's trace: each frame redraws only the art's rows in place (the cursor
+    /// saved and put back, so whatever the shell is doing below is left as it was). A bright head sweeps from left to
+    /// right leaving the line behind it, then the whole line flashes once and settles.
+    public static func frames(_ info: Info, cols: Int, top: Int = 1) -> [String] {
+        guard let at = artPlacement(cols: cols, top: top) else { return [] }
+        let s = Style(dark: info.dark)
+        let width = 30
+        func frame(_ cell: (Int, Character) -> String) -> String {
+            var out = "\u{1B}7"
+            for (r, row) in art.enumerated() {
+                out += "\u{1B}[\(at.row + r);\(at.col)H"
+                out += row.enumerated().map { cell($0.offset, $0.element) }.joined()
+            }
+            return out + Style.reset + "\u{1B}8"
+        }
+        var frames: [String] = []
+        // the sweep: nothing ahead of the head, the head bright, the trail in the line's colour
+        for head in stride(from: 0, through: width + 4, by: 2) {
+            frames.append(frame { x, ch in
+                if ch == " " || x > head { return " " }
+                if head - x < 3 { return s.head(String(ch)) }
+                return s.art(String(ch))
+            })
+        }
+        // one beat: the line bright, then back to rest
+        frames.append(frame { _, ch in ch == " " ? " " : s.head(String(ch)) })
+        frames.append(frame { _, ch in ch == " " ? " " : s.art(String(ch)) })
+        return frames
+    }
+
+    /// The command the "Try" line offers: the project's first script, else `git status` in a repository, else `ls -la`.
+    public static func suggestion(_ info: Info) -> String { info.commands.first ?? (info.branch != nil ? "git status" : "ls -la") }
 
     // MARK: text
 
@@ -199,6 +255,8 @@ public enum TerminalWelcome {
         func body(_ t: String) -> String { rgb(dark ? 0xC8C8C2 : 0x3A3A38) + t + Self.reset }
         func dim(_ t: String) -> String { rgb(dark ? 0x7C7C79 : 0x757573) + t + Self.reset }
         func art(_ t: String) -> String { rgb(dark ? 0xE6E6E0 : 0x2A2A28) + t + Self.reset }
+        /// The sweep's head: brightest white (darkest ink on light), bold.
+        func head(_ t: String) -> String { "\u{1B}[1m" + rgb(dark ? 0xFFFFFF : 0x000000) + t + Self.reset }
         func border(_ t: String) -> String { rgb(dark ? 0x4A4A47 : 0xC4C4BF) + t + Self.reset }
 
         /// The text without escape sequences.

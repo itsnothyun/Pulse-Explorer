@@ -56,18 +56,63 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         guard !started else { return }
         started = true
         let dir = directory
-        guard UserDefaults.standard.object(forKey: "terminalWelcome") as? Bool ?? true else { return start(in: dir) }
+        let welcome = UserDefaults.standard.object(forKey: "terminalWelcome") as? Bool ?? true
         let advance = ("W" as NSString).size(withAttributes: [.font: view.font]).width
+        let lineHeight = ceil(view.font.ascender - view.font.descender + view.font.leading)
         let cols = max(Int(view.bounds.width / max(advance, 1)) - 1, 20)
+        let rows = Int(view.bounds.height / max(lineHeight, 1))
         let dark = self.dark
         Task.detached(priority: .userInitiated) {
-            let info = TerminalWelcomeInfo.gather(dir, dark: dark)
+            var info = TerminalWelcomeInfo.gather(dir, dark: dark)
             await MainActor.run { [weak self] in
                 guard let self else { return }
-                self.view.feed(text: TerminalWelcome.render(info, cols: cols))
+                let prompt = self.boxPrompt
+                info.tryBox = !prompt
+                self.suggestion = TerminalWelcome.suggestion(info)
+                if welcome {
+                    let card = TerminalWelcome.render(info, cols: cols)
+                    self.view.feed(text: card)
+                    // the pulse line draws itself in (when the card has room to stay where it is)
+                    let height = card.components(separatedBy: "\r\n").count
+                    if Motion.on, rows >= height + 6 { self.animate(TerminalWelcome.frames(info, cols: cols)) }
+                }
                 self.start(in: dir)
             }
         }
+    }
+
+    /// The command the box prompt's hint offers (PULSE_TRY).
+    private var suggestion = ""
+
+    /// Pulse's box prompt is used for zsh (ShellIntegration), unless turned off (UserDefaults terminalPrompt = false).
+    private var boxPrompt: Bool {
+        (UserDefaults.standard.object(forKey: "terminalPrompt") as? Bool ?? true) && (Self.shell as NSString).lastPathComponent == "zsh"
+    }
+
+    private var animation: Timer?
+
+    /// Plays the frames, 28 ms apart (the first at once, so the still card is never seen without its sweep).
+    private func animate(_ frames: [String]) {
+        guard !frames.isEmpty else { return }
+        view.feed(text: frames[0])
+        var i = 1
+        animation = Timer.scheduledTimer(withTimeInterval: 0.028, repeats: true) { [weak self] t in
+            MainActor.assumeIsolated {
+                guard let self, i < frames.count else { return t.invalidate() }
+                self.view.feed(text: frames[i])
+                i += 1
+            }
+        }
+    }
+
+    static var shell: String {
+        ProcessInfo.processInfo.environment["SHELL"].flatMap { FileManager.default.isExecutableFile(atPath: $0) ? $0 : nil } ?? "/bin/zsh"
+    }
+
+    /// Pulse's zsh files (ShellIntegration), written fresh in Application Support.
+    static func zshIntegration() -> URL? {
+        guard let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return nil }
+        return try? ShellIntegration.install(in: support.appendingPathComponent("Pulse Explorer/zsh", isDirectory: true))
     }
 
     /// The file manager's look: no background of its own (the card's glass shows through, as behind the list), the
@@ -92,7 +137,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
 
     /// The user's own shell as a login shell ("-zsh"), so their profile, PATH and prompt are all there.
     private func start(in dir: URL) {
-        let shell = ProcessInfo.processInfo.environment["SHELL"].flatMap { FileManager.default.isExecutableFile(atPath: $0) ? $0 : nil } ?? "/bin/zsh"
+        let shell = Self.shell
         var env = ProcessInfo.processInfo.environment
         env["TERM"] = "xterm-256color"
         env["COLORTERM"] = "truecolor"
@@ -100,6 +145,12 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         env["LANG"] = env["LANG"] ?? "en_US.UTF-8"
         // what Pulse's own launch put there is not the user's
         env.removeValue(forKey: "PULSE_VIEWER")
+        // the welcome card's input box as the prompt: zsh starts from Pulse's files, which load the user's own first
+        if boxPrompt, let zdot = Self.zshIntegration() {
+            env["PULSE_USER_ZDOTDIR"] = env["ZDOTDIR"] ?? NSHomeDirectory()
+            env["ZDOTDIR"] = zdot.path
+            env["PULSE_TRY"] = suggestion
+        }
         let cwd = FileManager.default.fileExists(atPath: dir.path) ? dir.path : NSHomeDirectory()
         view.startProcess(executable: shell, args: ["-l"], environment: env.map { "\($0.key)=\($0.value)" },
                           execName: "-" + (shell as NSString).lastPathComponent, currentDirectory: cwd)
@@ -117,7 +168,10 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
 
     var title: String { shellTitle.flatMap { $0.isEmpty ? nil : $0 } ?? ProcessInspect.title(activity) }
 
-    func terminate() { view.process?.terminate() }
+    func terminate() {
+        animation?.invalidate()
+        view.process?.terminate()
+    }
 
     // MARK: SwiftTerm
 
