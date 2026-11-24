@@ -235,23 +235,74 @@ pub fn format_date(ms: i64) -> String {
     rf_core::format::datetime(ms)
 }
 
-/// Total size in bytes of the files under `path` ("Calculate size"). Links are not followed
-/// and unreadable folders count as empty. Blocks on the disk: call it off the main thread.
+/// A folder's size as far as it was counted.
+#[derive(uniffi::Record)]
+pub struct SizeResult {
+    pub bytes: u64,
+    /// Every file was counted (false: the time ran out, or the walk was cancelled; `bytes` is then a lower bound).
+    pub complete: bool,
+}
+
+/// Folder sizes walk on a pool of their own, two threads: a size being added up never takes every core the
+/// way the listing's pool may (the preview pane passing over node_modules and ~/Library took 350% CPU).
+fn size_pool() -> &'static rayon::ThreadPool {
+    static POOL: std::sync::OnceLock<rayon::ThreadPool> = std::sync::OnceLock::new();
+    POOL.get_or_init(|| rayon::ThreadPoolBuilder::new().num_threads(2).thread_name(|i| format!("folder-size-{i}")).build().expect("size pool"))
+}
+
+/// Bumped by [`cancel_folder_sizes`]: a walk started before stops at its next folder.
+static SIZE_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Stops every folder size being added up now (the preview pane's, when the selection moves on).
+#[uniffi::export]
+pub fn cancel_folder_sizes() {
+    SIZE_GENERATION.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+}
+
+fn size_walk(dir: &Path, skip: &[PathBuf], stop: &(dyn Fn() -> bool + Sync), complete: &std::sync::atomic::AtomicBool) -> u64 {
+    if stop() {
+        complete.store(false, std::sync::atomic::Ordering::Relaxed);
+        return 0;
+    }
+    // (folders macOS guards, the caller has no grant for: not entered, so no permission prompt for them)
+    if skip.iter().any(|s| s == dir) {
+        complete.store(false, std::sync::atomic::Ordering::Relaxed);
+        return 0;
+    }
+    let Ok(rd) = fs::read_dir(dir) else { return 0 };
+    let entries: Vec<_> = rd.filter_map(Result::ok).collect();
+    entries
+        .par_iter()
+        .map(|e| match e.file_type() {
+            Ok(t) if t.is_dir() => size_walk(&e.path(), skip, stop, complete),
+            Ok(t) if t.is_file() => e.metadata().map_or(0, |m| m.len()),
+            _ => 0,
+        })
+        .sum()
+}
+
+/// Size of the files under `path`, counted for at most `budget_ms` (0: no limit) and stopped by
+/// [`cancel_folder_sizes`]; folders in `skip` are not entered. Links are not followed and unreadable folders
+/// count as empty. Blocks: call it off the main thread.
+#[uniffi::export]
+pub fn folder_size_limited(path: String, budget_ms: u32, skip: Vec<String>) -> SizeResult {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let generation = SIZE_GENERATION.load(Ordering::SeqCst);
+    let deadline = (budget_ms > 0).then(|| std::time::Instant::now() + std::time::Duration::from_millis(budget_ms as u64));
+    let skip: Vec<PathBuf> = skip.into_iter().map(PathBuf::from).collect();
+    let complete = AtomicBool::new(true);
+    let stop = || SIZE_GENERATION.load(Ordering::Relaxed) != generation || deadline.is_some_and(|d| std::time::Instant::now() >= d);
+    let bytes = size_pool().install(|| size_walk(Path::new(&path), &skip, &stop, &complete));
+    SizeResult { bytes, complete: complete.load(Ordering::Relaxed) }
+}
+
+/// Total size in bytes of the files under `path` ("Calculate size"), with no time limit (on the size pool,
+/// so two threads). Links are not followed and unreadable folders count as empty. Blocks on the disk: call it
+/// off the main thread.
 #[uniffi::export]
 pub fn folder_size(path: String) -> u64 {
-    fn walk(dir: &Path) -> u64 {
-        let Ok(rd) = fs::read_dir(dir) else { return 0 };
-        let entries: Vec<_> = rd.filter_map(Result::ok).collect();
-        entries
-            .par_iter()
-            .map(|e| match e.file_type() {
-                Ok(t) if t.is_dir() => walk(&e.path()),
-                Ok(t) if t.is_file() => e.metadata().map_or(0, |m| m.len()),
-                _ => 0,
-            })
-            .sum()
-    }
-    walk(Path::new(&path))
+    let complete = std::sync::atomic::AtomicBool::new(true);
+    size_pool().install(|| size_walk(Path::new(&path), &[], &|| false, &complete))
 }
 
 #[uniffi::export]
@@ -316,6 +367,35 @@ fn flags(_: &fs::Metadata) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sizes_skip_guarded_folders_and_stop_when_told() {
+        let d = std::env::temp_dir().join(format!("rf-mac-size-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(d.join("open/deep")).unwrap();
+        fs::create_dir_all(d.join("guarded")).unwrap();
+        fs::write(d.join("open/a.bin"), vec![0u8; 1000]).unwrap();
+        fs::write(d.join("open/deep/b.bin"), vec![0u8; 500]).unwrap();
+        fs::write(d.join("guarded/c.bin"), vec![0u8; 7000]).unwrap();
+        let p = d.display().to_string();
+
+        let all = folder_size_limited(p.clone(), 0, vec![]);
+        assert_eq!((all.bytes, all.complete), (8500, true));
+        assert_eq!(folder_size(p.clone()), 8500);
+
+        // a guarded folder is not entered: what is counted is a lower bound
+        let some = folder_size_limited(p.clone(), 0, vec![d.join("guarded").display().to_string()]);
+        assert_eq!((some.bytes, some.complete), (1500, false));
+
+        // a walk cancelled before it starts counts nothing and says so
+        let generation_before = SIZE_GENERATION.load(std::sync::atomic::Ordering::SeqCst);
+        let stop = || SIZE_GENERATION.load(std::sync::atomic::Ordering::Relaxed) != generation_before;
+        cancel_folder_sizes();
+        let complete = std::sync::atomic::AtomicBool::new(true);
+        assert_eq!(size_walk(&d, &[], &stop, &complete), 0);
+        assert!(!complete.load(std::sync::atomic::Ordering::Relaxed));
+        let _ = fs::remove_dir_all(&d);
+    }
 
     #[test]
     fn lists_sorts_and_hides() {

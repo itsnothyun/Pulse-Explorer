@@ -54,5 +54,9 @@ cp "$LUCIDE/../../LICENSE-LUCIDE" "$APP/Contents/Resources/icons/"
 
 # The interface in other languages (macos/Localization/<lang>.json)
 python3 macos/tools/l10n.py macos/Sources/RustyFiles macos/Localization "$APP/Contents/Resources"
-codesign --force --sign - "$APP" >/dev/null
+# A stable signature keeps what macOS let the app do (Desktop, Documents, Downloads…) across rebuilds: an ad-hoc one is a new
+# app to macOS every build, and it asks again. The first Apple Development / Developer ID certificate in the keychain, or
+# PULSE_SIGN_ID; ad-hoc only when there is none.
+SIGN_ID="${PULSE_SIGN_ID:-$(security find-identity -v -p codesigning 2>/dev/null | awk '/Apple Development|Developer ID Application/ {print $2; exit}')}"
+codesign --force --sign "${SIGN_ID:--}" "$APP" >/dev/null
 echo "$APP"

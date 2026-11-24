@@ -2,6 +2,7 @@ import AppKit
 import AVFoundation
 import ImageIO
 import Quartz
+import UniformTypeIdentifiers
 
 /// The preview / details pane at the right of the list (preview.rs): a large picture of the
 /// focused item, its name, and its properties. Quick Look draws the picture, so pictures,
@@ -24,7 +25,12 @@ final class PreviewPane: FlippedView {
     private let content = FlippedView()
     private var shown: URL?
     private var properties: [(String, String)] = []
-    private var generation = 0
+    private var generation = 0 {
+        didSet { latestGeneration = generation }
+    }
+    /// `generation` for the work off the main thread (a word read across threads: at worst a size counted once too many).
+    nonisolated(unsafe) private var latestGeneration = 0
+    nonisolated private func isCurrent(_ gen: Int) -> Bool { latestGeneration == gen }
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -134,12 +140,30 @@ final class PreviewPane: FlippedView {
         guard url != shown || url == nil else { return }
         shown = url
         generation += 1
+        // the folder size the last selection was still adding up is not wanted any more
+        cancelFolderSizes()
         let none = url == nil
         scroll.isHidden = none
         empty.isHidden = !none
         emptyIcon.isHidden = !none
         guard let url else {
             quickLook?.previewItem = nil
+            return
+        }
+        // a folder macOS guards (Desktop, Documents, a cloud drive like ~/Google Drive, which is a link into
+        // ~/Library/CloudStorage…) the user has not opened: nothing is read from it, not even its dates or icon, since any of
+        // that brings up the permission prompt when the selection only passes over it
+        if !PrivacyGuard.mayRead(url.path) {
+            quickLook?.isHidden = true
+            iconView.isHidden = false
+            iconView.image = NSWorkspace.shared.icon(for: .folder)
+            nameLabel.stringValue = url.lastPathComponent
+            setProperties([
+                (String(localized: "Type"), String(localized: "Folder")),
+                (String(localized: "Location"), url.deletingLastPathComponent().path.replacingOccurrences(of: "/", with: "/\u{200B}")),
+                (String(localized: "Contains"), String(localized: "Open the folder to see what it holds")),
+            ])
+            needsLayout = true
             return
         }
         let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .isPackageKey])
@@ -167,11 +191,22 @@ final class PreviewPane: FlippedView {
         setProperties(Self.quickProperties(url, folder: folder))
         // the slow ones (folder contents, picture size, duration) come when they are known
         let gen = generation
-        DispatchQueue.global(qos: .userInitiated).async {
-            let more = Self.slowProperties(url, folder: folder)
+        // a folder macOS guards (Desktop, Documents, a cloud drive…) is looked into only once the user has opened it: passing
+        // over it must not bring up the permission prompt
+        if folder, !PrivacyGuard.mayRead(url.path) {
+            setProperties(properties + [(String(localized: "Contains"), String(localized: "Open the folder to see what it holds"))])
+            needsLayout = true
+            return
+        }
+        let skip = folder ? PrivacyGuard.unopened(under: url.path) : []
+        // a folder's size waits until the selection rests (the arrow keys pass over many) and stops after a few seconds
+        let delay: Double = folder ? 0.45 : 0
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard self?.isCurrent(gen) ?? false else { return }
+            let more = Self.slowProperties(url, folder: folder, skip: skip)
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
-                    guard gen == self.generation, !more.isEmpty else { return }
+                    guard let self, gen == self.generation, !more.isEmpty else { return }
                     self.setProperties(self.properties + more)
                 }
             }
@@ -238,12 +273,15 @@ final class PreviewPane: FlippedView {
 
     /// Read off the main thread: a folder's contents and size; a picture's dimensions; a
     /// recording's length; Finder tags.
-    nonisolated private static func slowProperties(_ url: URL, folder: Bool) -> [(String, String)] {
+    nonisolated private static func slowProperties(_ url: URL, folder: Bool, skip: [String]) -> [(String, String)] {
         var out: [(String, String)] = []
         if folder {
             let n = (try? FileManager.default.contentsOfDirectory(atPath: url.path).count) ?? 0
             out.append((String(localized: "Contains"), n == 1 ? String(localized: "1 item") : String(localized: "\(n) items")))
-            out.append((String(localized: "Size"), formatSize(bytes: folderSize(path: url.path))))
+            // at most 4 s (on two threads); what was counted by then is shown as "at least"
+            let size = folderSizeLimited(path: url.path, budgetMs: 4000, skip: skip)
+            let text = formatSize(bytes: size.bytes)
+            out.append((String(localized: "Size"), size.complete ? text : String(localized: "at least \(text)")))
         } else if let src = CGImageSourceCreateWithURL(url as CFURL, nil),
             let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any],
             let w = props[kCGImagePropertyPixelWidth] as? Int, let h = props[kCGImagePropertyPixelHeight] as? Int

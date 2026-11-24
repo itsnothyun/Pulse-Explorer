@@ -1500,10 +1500,11 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
                     cell.text = formatSize(bytes: size)
                 } else if Self.sizing.contains(Self.sizeKey(path)) {
                     cell.text = String(localized: "Calculating…")
-                } else if AppSettings.autoFolderSizes {
-                    // Files › Calculate folder sizes: asked for as soon as the row shows
+                } else if AppSettings.autoFolderSizes && PrivacyGuard.mayRead(path) {
+                    // Files › Calculate folder sizes: asked for as soon as the row shows (not for a folder macOS guards that
+                    // was never opened: the size would bring up its permission prompt; a click on it still counts it)
                     cell.text = String(localized: "Calculating…")
-                    DispatchQueue.main.async { [weak self] in self?.calculateSize(path) }
+                    DispatchQueue.main.async { [weak self] in self?.calculateSize(path, auto: true) }
                 } else {
                     cell.text = String(localized: "Calculate size")
                     cell.isLink = true
@@ -1528,14 +1529,16 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
         return q
     }()
 
-    private func calculateSize(_ path: String) {
+    /// `auto`: asked for by the setting, not by a click: guarded folders under it that were never opened are left out.
+    private func calculateSize(_ path: String, auto: Bool = false) {
         let key = Self.sizeKey(path)
         guard !Self.sizing.contains(key), Self.folderSizes[key] == nil else { return }
         Self.sizing.insert(key)
         reloadSize(of: path)
         let onDisk = AppSettings.folderSizeOnDisk
+        let skip = auto ? PrivacyGuard.unopened(under: path) : []
         Self.sizeQueue.addOperation {
-            let size = onDisk ? Self.sizeOnDisk(path) : folderSize(path: path)
+            let size = onDisk ? Self.sizeOnDisk(path) : (skip.isEmpty ? folderSize(path: path) : folderSizeLimited(path: path, budgetMs: 0, skip: skip).bytes)
             DispatchQueue.main.async {
                 MainActor.assumeIsolated { [weak self] in
                     Self.sizing.remove(key)

@@ -26,7 +26,11 @@ mv "$APP/Contents/MacOS/RustyFiles" "$APP/Contents/MacOS/Pulse Explorer"
     -c "Set :CFBundleIdentifier app.pulse.explorer.files" \
     -c "Set :NSLocalNetworkUsageDescription Ferry finds Pulse Explorer on your other devices on this network, to send files to them." "$PL"
 cp "$HERE/icons/icon.icns" "$APP/Contents/Resources/AppIcon.icns"
-codesign --force --sign - "$APP" >/dev/null
+# A stable signature keeps what macOS let the app do (Desktop, Documents, Downloads…) across rebuilds: an ad-hoc one is a new
+# app to macOS every build, and it asks again. The first Apple Development / Developer ID certificate in the keychain, or
+# PULSE_SIGN_ID; ad-hoc only when there is none.
+SIGN_ID="${PULSE_SIGN_ID:-$(security find-identity -v -p codesigning 2>/dev/null | awk '/Apple Development|Developer ID Application/ {print $2; exit}')}"
+codesign --force --sign "${SIGN_ID:--}" "$APP" >/dev/null
 # The dev build (`pnpm desktop:tauri`) uses the same copy.
 DEV="$FILES/macos/build/Pulse Explorer.app"
 rm -rf "$DEV" && cp -R "$APP" "$DEV"
