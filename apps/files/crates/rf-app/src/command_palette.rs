@@ -30,6 +30,7 @@ fn commands() -> Vec<Cmd> {
         cmd!("Yeni pencere", "Ctrl+N", L::AppWindow, NewWindow),
         cmd!("Sekmeyi kapat", "Ctrl+W", L::X, CloseTab),
         cmd!("Sekmeyi çoğalt", "Ctrl+Shift+K", L::Copy, DuplicateTab),
+        cmd!("Sekmeyi yeniden adlandır…", "", L::PencilLine, RenameTab),
         cmd!("Diğer sekmeleri kapat", "", L::X, CloseOtherTabs),
         cmd!("Tüm sekmeleri kapat", "", L::X, CloseAllTabs),
         cmd!("Kapatılan sekmeyi yeniden aç", "Ctrl+Shift+T", L::RotateCcw, ReopenClosedTab),

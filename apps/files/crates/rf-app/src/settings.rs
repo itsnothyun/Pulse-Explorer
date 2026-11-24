@@ -89,6 +89,8 @@ pub struct NamedSession {
     pub tabs: Vec<String>,
     pub panes: Vec<SessionPane>,
     pub active: usize,
+    /// Names given to the tabs (Rename tab), in tab order; "" = the tab's own.
+    pub names: Vec<String>,
 }
 
 /// The second pane of a tab in the saved session (issue 20: a window split in two came back with one pane, at the left pane's
@@ -417,6 +419,8 @@ pub struct Settings {
     pub restore_session: bool,
     /// Last session's tab locations ("" = Home).
     pub session_tabs: Vec<String>,
+    /// Names given to those tabs (Rename tab), in the same order; "" = the tab's own.
+    pub session_names: Vec<String>,
     pub session_active: usize,
     /// The tabs of the last session that were split in two: the second pane of each (see [`SessionPane`]). A tab that is not named
     /// here had one pane.
@@ -765,6 +769,7 @@ impl Default for Settings {
             renderer: RendererPref::Auto,
             restore_session: true,
             session_tabs: Vec::new(),
+            session_names: Vec::new(),
             session_panes: Vec::new(),
             session_active: 0,
             saved_sessions: Vec::new(),
