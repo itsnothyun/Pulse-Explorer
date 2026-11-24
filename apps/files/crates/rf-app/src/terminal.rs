@@ -150,6 +150,8 @@ thread_local! {
 pub enum Command {
     Close,
     New,
+    /// The Agents panel (Ctrl+Shift+A).
+    Agents,
 }
 
 /// A message from tab `id`'s page (`host`: the page's window; `owner`: ours). Replies go out through `web_view::post`.
@@ -205,10 +207,45 @@ pub fn on_message(id: EntityId, host: isize, owner: isize, text: &str) -> Option
         "cmd" => match m.get("v")?.as_str()? {
             "close" => Some(Command::Close),
             "new" => Some(Command::New),
+            "agents" => Some(Command::Agents),
             _ => None,
         },
         _ => None,
     }
+}
+
+/// A terminal tab as the Agents panel lists it.
+pub struct Running {
+    pub id: EntityId,
+    pub status: Status,
+    /// What the tab is called (the agent's name, or the folder's at the prompt).
+    pub name: String,
+    pub folder: String,
+    pub alive: bool,
+}
+
+/// Every terminal tab of window `owner`: agents waiting for you first, then working ones, then the rest.
+pub fn running(owner: isize) -> Vec<Running> {
+    let mut v: Vec<Running> = SESSIONS.with_borrow(|all| {
+        all.iter()
+            .filter(|(_, s)| s.owner == owner)
+            .map(|(id, s)| Running {
+                id: *id,
+                status: s.status,
+                name: s.shown_title.trim_start_matches(s.status.mark()).to_string(),
+                folder: s.folder.clone(),
+                alive: s.alive.load(Ordering::Relaxed),
+            })
+            .collect()
+    });
+    let rank = |s: Status| match s {
+        Status::Waiting => 0,
+        Status::Working => 1,
+        Status::Running => 2,
+        Status::Idle => 3,
+    };
+    v.sort_by(|a, b| rank(a.status).cmp(&rank(b.status)).then_with(|| a.name.cmp(&b.name)));
+    v
 }
 
 /// The tab is gone: its shell ends.

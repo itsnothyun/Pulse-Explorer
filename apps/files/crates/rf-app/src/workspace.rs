@@ -1057,6 +1057,7 @@ impl Workspace {
         }
         let sub = cx.subscribe_in(&tab, window, |this, emitter, ev: &FolderEvent, window, cx| match ev {
             FolderEvent::Picked(paths) => crate::picker::picked(this, paths.clone(), window, cx),
+            FolderEvent::ShowAgents => this.show_agents(window, cx),
             FolderEvent::CloseTab => {
                 if let Some(ix) = this.tabs.iter().position(|t| &t.left == emitter || t.right.as_ref() == Some(emitter)) {
                     this.close_tab(ix, window, cx);
@@ -1320,12 +1321,73 @@ impl Workspace {
         .unwrap_or_default()
     }
 
+    /// The Agents panel (the Mac's AgentsPanel): every terminal tab of this window with what it is doing, agents waiting for you
+    /// first; picking one shows its tab.
+    pub(crate) fn show_agents(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use crate::fluent_menu::{Item, Menu, MenuIcon};
+        use rf_pulse::agents::Status;
+        let me = cx.entity().downgrade();
+        let list = crate::terminal::running(crate::look::window::hwnd_of(window));
+        let mut items = Vec::new();
+        for r in list {
+            // the tab (and pane) the page belongs to
+            let Some((ix, right)) = self.tabs.iter().enumerate().find_map(|(ix, t)| {
+                if t.left.read(cx).web_id() == r.id {
+                    Some((ix, false))
+                } else if t.right.as_ref().is_some_and(|v| v.read(cx).web_id() == r.id) {
+                    Some((ix, true))
+                } else {
+                    None
+                }
+            }) else {
+                continue;
+            };
+            let icon = match r.status {
+                Status::Waiting => L::BellRing,
+                Status::Working => L::LoaderCircle,
+                Status::Running => L::Play,
+                Status::Idle => L::SquareTerminal,
+            };
+            let what = if r.alive { r.status.label() } else { crate::i18n::tx("Kabuk kapandı", "Shell ended") };
+            let label = if r.name == r.folder { r.name.clone() } else { format!("{} · {}", r.name, r.folder) };
+            let me = me.clone();
+            items.push(
+                Item::action(label, MenuIcon::Lucide(icon), move |w: &mut Window, cx: &mut App| {
+                    let _ = me.update(cx, |ws, cx| {
+                        if ix < ws.tabs.len() {
+                            ws.activate(ix, w, cx);
+                            ws.set_active_pane(right, cx);
+                        }
+                    });
+                })
+                .hint(what),
+            );
+        }
+        if items.is_empty() {
+            items.push(Item::action(crate::i18n::tx("Açık terminal yok", "No terminal tabs open"), MenuIcon::Lucide(L::SquareTerminal), |_, _| {}).enabled(false));
+        }
+        items.push(Item::Separator);
+        let me2 = cx.entity().downgrade();
+        items.push(
+            Item::action(crate::i18n::tx("Yeni terminal sekmesi", "New terminal tab"), MenuIcon::Lucide(L::Plus), move |w: &mut Window, cx: &mut App| {
+                let _ = me2.update(cx, |ws, cx| {
+                    let dir = ws.terminal_dir(cx);
+                    ws.open_terminal_tab(dir, w, cx)
+                });
+            })
+            .hint("Ctrl+Shift+`"),
+        );
+        // under the tab strip, in the middle (the panel is asked for by key as often as by mouse)
+        let at = point(window.viewport_size().width / 2. - px(170.), px(64.));
+        crate::fluent_menu::show(Menu { quick: Vec::new(), items }, at, window, cx);
+    }
+
     /// The "+" button's right click: a folder tab or a browser tab.
     fn new_tab_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         use crate::fluent_menu::{Item, Menu, MenuIcon};
         let me = cx.entity().downgrade();
         let me2 = me.clone();
-        let (me3, me4) = (me.clone(), me.clone());
+        let (me3, me4, me5) = (me.clone(), me.clone(), me.clone());
         let items = vec![
             Item::action(t!("Yeni sekme"), MenuIcon::Lucide(L::Plus), move |w: &mut Window, cx: &mut App| {
                 let _ = me.update(cx, |ws, cx| ws.open_new_tab(w, cx));
@@ -1341,6 +1403,10 @@ impl Workspace {
                 });
             })
             .hint("Ctrl+Shift+`"),
+            Item::action(t!("Ajanlar"), MenuIcon::Lucide(L::Bot), move |w: &mut Window, cx: &mut App| {
+                let _ = me5.update(cx, |ws, cx| ws.show_agents(w, cx));
+            })
+            .hint("Ctrl+Shift+A"),
             Item::action(crate::i18n::tx("Windows Terminal'de aç", "Open in Windows Terminal"), MenuIcon::Lucide(L::ExternalLink), move |_: &mut Window, cx: &mut App| {
                 if let Some(dir) = me4.upgrade().map(|ws| ws.read(cx).terminal_dir(cx)) {
                     std::thread::spawn(move || {
@@ -4741,6 +4807,7 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &FocusSearch, window, cx| {
                 this.enter_search(window, cx);
             }))
+            .on_action(cx.listener(|this, _: &ShowAgents, window, cx| this.show_agents(window, cx)))
             .on_action(cx.listener(|this, _: &OpenTerminal, window, cx| {
                 // Pulse's own terminal tab (Windows Terminal stays on the "+" menu and the folder menus)
                 let dir = this.terminal_dir(cx);

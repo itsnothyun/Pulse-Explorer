@@ -32,6 +32,7 @@ gpui_kit::actions!(
         FocusSearch,
         ToggleHidden,
         OpenTerminal,
+        ShowAgents,
         Properties,
         ClearSelection,
         CopyItems,
@@ -207,6 +208,7 @@ pub fn bind(cx: &mut App) {
         KeyBinding::new("ctrl-e", FocusSearch, None),
         KeyBinding::new("ctrl-h", ToggleHidden, None),
         KeyBinding::new("ctrl-shift-`", OpenTerminal, None),
+        KeyBinding::new("ctrl-shift-a", ShowAgents, None),
     ]);
     bind_layout_shifted(cx);
 }

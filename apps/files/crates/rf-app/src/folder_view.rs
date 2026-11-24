@@ -200,6 +200,8 @@ pub enum FolderEvent {
     Picked(Vec<PathBuf>),
     /// The view's tab closes (a terminal tab's Ctrl+W, which its page gets before the app).
     CloseTab,
+    /// The Agents panel (a terminal tab's Ctrl+Shift+A).
+    ShowAgents,
 }
 
 /// Details columns shown right now (see `FolderView::visible_cols`).
@@ -984,6 +986,11 @@ impl FolderView {
         }
     }
 
+    /// The id the tab's page (`web_view`, `terminal`) goes by.
+    pub fn web_id(&self) -> EntityId {
+        self.web_id
+    }
+
     /// The page's own title, once it has one.
     pub fn web_title(&self) -> Option<String> {
         self.web_events.as_ref().and_then(|_| crate::web_view::title(self.web_id))
@@ -1050,6 +1057,7 @@ impl FolderView {
             WebEvent::Title(_) => {}
             WebEvent::NewTab(url) => cx.emit(FolderEvent::OpenInNewTab(Location::Web { url })),
             WebEvent::Terminal(crate::terminal::Command::Close) => cx.emit(FolderEvent::CloseTab),
+            WebEvent::Terminal(crate::terminal::Command::Agents) => cx.emit(FolderEvent::ShowAgents),
             WebEvent::Terminal(crate::terminal::Command::New) => {
                 let dir = match self.location() {
                     Location::Web { url } => crate::terminal::dir_of(url),

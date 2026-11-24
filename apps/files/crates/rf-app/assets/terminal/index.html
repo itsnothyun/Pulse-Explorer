@@ -87,7 +87,8 @@ term.attachCustomKeyEventHandler((e) => {
   if (e.ctrlKey && !e.shiftKey && k === "-") { setFont(fontSize - 1); return false; }
   if (e.ctrlKey && !e.shiftKey && k === "0") { setFont(13); return false; }
   if (e.ctrlKey && !e.shiftKey && k === "w") { send({ t: "cmd", v: "close" }); return false; }
-  if (e.ctrlKey && e.shiftKey && (e.code === "Backquote" || k === "t")) { send({ t: "cmd", v: "new" }); return false; }
+  if (e.ctrlKey && e.shiftKey && e.code === "Backquote") { send({ t: "cmd", v: "new" }); return false; }
+  if (e.ctrlKey && e.shiftKey && k === "a") { send({ t: "cmd", v: "agents" }); return false; }
   if (e.ctrlKey && k === "f" && e.shiftKey) { return true; }
   return true;
 });
