@@ -13,6 +13,7 @@ pub mod apps_direct;
 pub mod bench;
 pub mod cert;
 pub mod clipboard;
+pub mod ocr;
 pub mod vfiles;
 pub mod complete;
 pub mod ctxmenu;

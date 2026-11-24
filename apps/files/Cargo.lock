@@ -6338,6 +6338,7 @@ dependencies = [
  "rf-dialog",
  "rf-nearby",
  "rf-player",
+ "rf-pulse",
  "rf-win",
  "rustdecoder",
  "serde",
@@ -6439,6 +6440,18 @@ dependencies = [
  "filmcraft-time",
  "rayon",
  "windows 0.62.2",
+]
+
+[[package]]
+name = "rf-pulse"
+version = "0.9.0"
+dependencies = [
+ "chrono",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
 ]
 
 [[package]]

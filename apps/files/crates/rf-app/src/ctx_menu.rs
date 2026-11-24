@@ -394,6 +394,9 @@ impl FolderView {
             v.push(Item::action(t!("Diğer panele kopyala"), icon(L::CopyPlus), act(me, move |_, _, cx| cx.emit(FolderEvent::ToOtherPane(Transfer::Copy, c.clone())))));
             v.push(Item::action(t!("Diğer panele taşı"), icon(L::MoveRight), act(me, move |_, _, cx| cx.emit(FolderEvent::ToOtherPane(Transfer::Move, m.clone())))));
         }
+        if !in_archive {
+            v.extend(crate::pulse_tools::selection_items(me, items));
+        }
         if single_dir && mp.terminal && !in_archive {
             v.push(Item::Separator);
             let d = target_dir.clone();
@@ -446,6 +449,10 @@ impl FolderView {
         }
         let show_hidden = self.filter.show_hidden;
         v.push(Item::action(t!("Gizli öğeleri göster"), icon(L::Eye), act(me, |v, _, cx| v.toggle_hidden(cx))).checked(show_hidden).hint("Ctrl+H"));
+        if !in_archive && !self.is_search() && !crate::archive_view::is_browsable_path(dir) && !rf_win::ftp::is_ftp(dir) {
+            v.push(Item::Separator);
+            v.extend(crate::pulse_tools::background_items(me, dir));
+        }
         v.push(Item::Separator);
         if !in_archive {
             let d = dir.to_path_buf();

@@ -27,6 +27,22 @@ jobs:
       - run: pnpm vitest run
       - run: npx tsc --noEmit -p apps/web
 
+  windows-check:
+    name: Windows file manager check and Pulse tests
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/files -> target
+          key: check
+      # the logic shared with the Mac (clipboard, scripts, notes, disk, agents, the terminal's welcome card)
+      - run: cargo test --manifest-path apps/files/Cargo.toml -p rf-pulse
+      # compile errors in the file manager in minutes, before the full installer build below
+      - run: cargo check --manifest-path apps/files/Cargo.toml -p rf-app --bins
+
   windows:
     name: Windows desktop build
     runs-on: windows-latest

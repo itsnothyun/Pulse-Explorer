@@ -46,6 +46,7 @@ mod nav_touch;
 mod ui_stall;
 mod places;
 mod pulse_library;
+mod pulse_tools;
 mod settings;
 mod settings_merge;
 mod shellless;

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/rf-core", "crates/rf-win", "crates/rf-app", "crates/rf-nearby", "crates/rf-archive", "crates/rf-dialog", "crates/rf-shellguard", "crates/rf-player", "crates/rustdecoder", "tools/gpustress"]
+members = ["crates/rf-core", "crates/rf-pulse", "crates/rf-win", "crates/rf-app", "crates/rf-nearby", "crates/rf-archive", "crates/rf-dialog", "crates/rf-shellguard", "crates/rf-player", "crates/rustdecoder", "tools/gpustress"]
 # The macOS app (Swift in macos/, its Rust bridge in crates/rf-mac) is built on the Mac only, as a workspace of its own.
 exclude = ["crates/rf-mac", "macos"]
 
@@ -13,6 +13,7 @@ publish = false
 [workspace.dependencies]
 rf-core = { path = "crates/rf-core" }
 rf-win = { path = "crates/rf-win" }
+rf-pulse = { path = "crates/rf-pulse" }
 rf-player = { path = "crates/rf-player" }
 rf-nearby = { path = "crates/rf-nearby" }
 rustdecoder = { path = "crates/rustdecoder" }
@@ -59,6 +60,9 @@ hadris-storage = "3.0.0-rc.3"
 lzma-rust2 = { version = "0.25", default-features = false, features = ["std", "xz", "encoder"] }
 windows = { version = "0.62", features = [
     "Data_Pdf",
+    # Windows.Media.Ocr reading a picture (Pulse's "Copy text", rf-win ocr.rs)
+    "Graphics_Imaging",
+    "Media_Ocr",
     # Windows.Graphics.Capture: the glass's screen capture that leaves chosen windows out of one capture only (glass/wgc.rs)
     "Foundation_Collections",
     "Graphics_Capture",
