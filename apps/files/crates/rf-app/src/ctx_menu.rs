@@ -400,7 +400,13 @@ impl FolderView {
         if single_dir && mp.terminal && !in_archive {
             v.push(Item::Separator);
             let d = target_dir.clone();
-            v.push(Item::action(t!("Terminalde aç"), icon(L::SquareTerminal), move |_, _| open_terminal(d.clone())).hint("Ctrl+Shift+`"));
+            {
+                let t = d.clone();
+                v.push(Item::action(t!("Terminalde aç"), icon(L::SquareTerminal), act(me, move |_, _, cx| {
+                    cx.emit(FolderEvent::OpenInNewTab(Location::Web { url: crate::terminal::url_for(&t) }))
+                })).hint("Ctrl+Shift+`"));
+            }
+            v.push(Item::action(crate::i18n::tx("Windows Terminal'de aç", "Open in Windows Terminal"), icon(L::ExternalLink), move |_, _| open_terminal(d.clone())));
         }
         v.push(Item::Separator);
         v.push(Item::Sub { label: t!("Diğer seçenekleri göster").into(), icon: icon(L::Ellipsis), items: Sub::Pending { key: "more", fallback: None } });
@@ -456,7 +462,13 @@ impl FolderView {
         v.push(Item::Separator);
         if !in_archive {
             let d = dir.to_path_buf();
-            v.push(Item::action(t!("Terminalde aç"), icon(L::SquareTerminal), move |_, _| open_terminal(d.clone())).hint("Ctrl+Shift+`"));
+            {
+                let t = d.clone();
+                v.push(Item::action(t!("Terminalde aç"), icon(L::SquareTerminal), act(me, move |_, _, cx| {
+                    cx.emit(FolderEvent::OpenInNewTab(Location::Web { url: crate::terminal::url_for(&t) }))
+                })).hint("Ctrl+Shift+`"));
+            }
+            v.push(Item::action(crate::i18n::tx("Windows Terminal'de aç", "Open in Windows Terminal"), icon(L::ExternalLink), move |_, _| open_terminal(d.clone())));
         }
         // the folder organizer: only where the folder has rules
         if !self.is_search() && crate::organizer::has_rules_for(dir, cx) {

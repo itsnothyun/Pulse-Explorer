@@ -7,6 +7,7 @@ pub mod disk;
 pub mod naming;
 pub mod notes;
 pub mod scripts;
+pub mod term;
 pub mod today;
 pub mod welcome;
 pub mod workspaces;

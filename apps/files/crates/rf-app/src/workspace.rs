@@ -1057,6 +1057,11 @@ impl Workspace {
         }
         let sub = cx.subscribe_in(&tab, window, |this, emitter, ev: &FolderEvent, window, cx| match ev {
             FolderEvent::Picked(paths) => crate::picker::picked(this, paths.clone(), window, cx),
+            FolderEvent::CloseTab => {
+                if let Some(ix) = this.tabs.iter().position(|t| &t.left == emitter || t.right.as_ref() == Some(emitter)) {
+                    this.close_tab(ix, window, cx);
+                }
+            }
             FolderEvent::ToOtherPane(kind, paths) => {
                 if let Some(other) = this.other_pane(emitter) {
                     let dest = match other.read(cx).location() {
@@ -1077,7 +1082,7 @@ impl Workspace {
                 let keep = this.active;
                 this.open_tab(loc.clone(), window, cx);
                 // a view asked for by name (disk usage) is what the user wants to see now
-                let wanted = matches!(loc, Location::DiskUsage(_));
+                let wanted = matches!(loc, Location::DiskUsage(_)) || matches!(loc, Location::Web { url } if crate::terminal::is_terminal(url));
                 if !wanted && !cx.global::<crate::settings::Settings>().focus_new_tab {
                     this.activate(keep, window, cx);
                 }
@@ -1299,11 +1304,28 @@ impl Workspace {
         self.begin_address_edit(window, cx);
     }
 
+    /// Pulse Explorer's terminal: a new tab with a shell in `dir` (`terminal`).
+    pub(crate) fn open_terminal_tab(&mut self, dir: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_tab(Location::Web { url: crate::terminal::url_for(&dir) }, window, cx);
+    }
+
+    /// The folder the tab in front shows (Home's: the user's folder), for a new terminal.
+    fn terminal_dir(&self, cx: &App) -> PathBuf {
+        let loc = self.active_tab().read(cx).location().clone();
+        match &loc {
+            Location::Web { url } => crate::terminal::dir_of(url),
+            l => l.path().map(Path::to_path_buf),
+        }
+        .or_else(dirs::home_dir)
+        .unwrap_or_default()
+    }
+
     /// The "+" button's right click: a folder tab or a browser tab.
     fn new_tab_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         use crate::fluent_menu::{Item, Menu, MenuIcon};
         let me = cx.entity().downgrade();
         let me2 = me.clone();
+        let (me3, me4) = (me.clone(), me.clone());
         let items = vec![
             Item::action(t!("Yeni sekme"), MenuIcon::Lucide(L::Plus), move |w: &mut Window, cx: &mut App| {
                 let _ = me.update(cx, |ws, cx| ws.open_new_tab(w, cx));
@@ -1311,6 +1333,20 @@ impl Workspace {
             .hint("Ctrl+T"),
             Item::action(crate::i18n::tx("Yeni tarayıcı sekmesi", "New browser tab"), MenuIcon::Lucide(L::Globe), move |w: &mut Window, cx: &mut App| {
                 let _ = me2.update(cx, |ws, cx| ws.open_browser_tab(w, cx));
+            }),
+            Item::action(crate::i18n::tx("Yeni terminal sekmesi", "New terminal tab"), MenuIcon::Lucide(L::SquareTerminal), move |w: &mut Window, cx: &mut App| {
+                let _ = me3.update(cx, |ws, cx| {
+                    let dir = ws.terminal_dir(cx);
+                    ws.open_terminal_tab(dir, w, cx)
+                });
+            })
+            .hint("Ctrl+Shift+`"),
+            Item::action(crate::i18n::tx("Windows Terminal'de aç", "Open in Windows Terminal"), MenuIcon::Lucide(L::ExternalLink), move |_: &mut Window, cx: &mut App| {
+                if let Some(dir) = me4.upgrade().map(|ws| ws.read(cx).terminal_dir(cx)) {
+                    std::thread::spawn(move || {
+                        let _ = rf_win::shell::open_terminal(&dir);
+                    });
+                }
             }),
         ];
         crate::fluent_menu::show(Menu { quick: Vec::new(), items }, window.mouse_position(), window, cx);
@@ -4705,12 +4741,10 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &FocusSearch, window, cx| {
                 this.enter_search(window, cx);
             }))
-            .on_action(cx.listener(|this, _: &OpenTerminal, _, cx| {
-                if let Some(dir) = this.active_tab().read(cx).location().path().map(Path::to_path_buf) {
-                    std::thread::spawn(move || {
-                        let _ = rf_win::shell::open_terminal(&dir);
-                    });
-                }
+            .on_action(cx.listener(|this, _: &OpenTerminal, window, cx| {
+                // Pulse's own terminal tab (Windows Terminal stays on the "+" menu and the folder menus)
+                let dir = this.terminal_dir(cx);
+                this.open_terminal_tab(dir, window, cx);
             }))
             .relative()
             .children(backdrop_layers)

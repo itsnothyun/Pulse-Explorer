@@ -62,6 +62,7 @@ mod shelf_view;
 mod status_center;
 mod transfer_view;
 mod tags;
+mod terminal;
 mod undo;
 mod preview;
 mod preview_trace;

@@ -1,0 +1,131 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Terminal</title>
+<link rel="stylesheet" href="xterm.css">
+<style>
+  :root { --bg: #090909; --fg: #e4e4e7; color-scheme: dark; }
+  @media (prefers-color-scheme: light) { :root { --bg: #fbfbfc; --fg: #18181b; color-scheme: light; } }
+  html, body { margin: 0; height: 100%; background: var(--bg); overflow: hidden; }
+  #term { position: absolute; inset: 10px 6px 6px 14px; }
+  .xterm .xterm-viewport { background: transparent !important; scrollbar-width: thin; }
+  #ended { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%); display: none;
+    font: 12px "Segoe UI Variable", "Segoe UI", sans-serif; color: var(--fg); opacity: .75;
+    background: color-mix(in srgb, var(--fg) 8%, transparent); padding: 6px 12px; border-radius: 999px; }
+</style>
+</head>
+<body>
+<div id="term"></div>
+<div id="ended">The shell ended · press Enter to start a new one</div>
+<script src="xterm.js"></script>
+<script src="addon-fit.js"></script>
+<script>
+"use strict";
+// Pulse Explorer's terminal tab on Windows (rf-app terminal.rs): xterm.js here, a ConPTY shell in the app. Messages go both
+// ways as JSON over WebView2's postMessage: we send ready/in/size/cmd, the app sends out/frames/title/exit.
+const host = window.chrome && window.chrome.webview;
+const dir = new URLSearchParams(location.search).get("dir") || "";
+const light = matchMedia("(prefers-color-scheme: light)").matches;
+const dark = { background: "#00000000", foreground: "#e4e4e7", cursor: "#a78bfa", cursorAccent: "#090909", selectionBackground: "#a78bfa55",
+  black: "#27272a", red: "#f87171", green: "#4ade80", yellow: "#facc15", blue: "#60a5fa", magenta: "#c084fc", cyan: "#22d3ee", white: "#e4e4e7",
+  brightBlack: "#71717a", brightRed: "#fca5a5", brightGreen: "#86efac", brightYellow: "#fde047", brightBlue: "#93c5fd", brightMagenta: "#d8b4fe", brightCyan: "#67e8f9", brightWhite: "#fafafa" };
+const lightTheme = { ...dark, foreground: "#18181b", cursor: "#7c3aed", cursorAccent: "#fbfbfc", selectionBackground: "#7c3aed33",
+  black: "#18181b", white: "#52525b", brightBlack: "#71717a", brightWhite: "#27272a", yellow: "#a16207", brightYellow: "#ca8a04", cyan: "#0e7490", brightCyan: "#0891b2" };
+let fontSize = 13;
+try { fontSize = +localStorage.getItem("pulse.term.font") || 13; } catch {}
+const term = new Terminal({
+  allowTransparency: true, cursorBlink: true, cursorStyle: "bar", fontSize, lineHeight: 1.15, scrollback: 10000,
+  fontFamily: '"Cascadia Code", "Cascadia Mono", Consolas, "Courier New", monospace',
+  theme: light ? lightTheme : dark, macOptionIsMeta: false, rightClickSelectsWord: true,
+});
+const fit = new FitAddon.FitAddon();
+term.loadAddon(fit);
+term.open(document.getElementById("term"));
+fit.fit();
+
+const send = (m) => host && host.postMessage(JSON.stringify(m));
+let ended = false;
+const decode = (b64) => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+
+function start() {
+  ended = false;
+  document.getElementById("ended").style.display = "none";
+  send({ t: "ready", dir, cols: term.cols, rows: term.rows, light });
+}
+
+term.onData((d) => {
+  if (ended) { if (d === "\r") { term.reset(); start(); } return; }
+  send({ t: "in", d });
+});
+term.onResize(({ cols, rows }) => send({ t: "size", cols, rows }));
+new ResizeObserver(() => { try { fit.fit(); } catch {} }).observe(document.getElementById("term"));
+
+function setFont(n) {
+  fontSize = Math.max(8, Math.min(32, n));
+  term.options.fontSize = fontSize;
+  try { localStorage.setItem("pulse.term.font", String(fontSize)); } catch {}
+  fit.fit();
+}
+
+// copy and paste (Ctrl+C copies only when there is a selection, else it is the shell's interrupt), text size, and the
+// tab commands the app's own keys would do if the page did not have the keyboard
+term.attachCustomKeyEventHandler((e) => {
+  if (e.type !== "keydown") return true;
+  const k = e.key.toLowerCase();
+  if (e.ctrlKey && (k === "c" && (e.shiftKey || term.hasSelection()))) {
+    if (term.hasSelection()) navigator.clipboard.writeText(term.getSelection());
+    term.clearSelection();
+    return false;
+  }
+  if (e.ctrlKey && k === "v") {
+    navigator.clipboard.readText().then((t) => t && term.paste(t));
+    e.preventDefault();
+    return false;
+  }
+  if (e.ctrlKey && !e.shiftKey && (k === "=" || k === "+")) { setFont(fontSize + 1); return false; }
+  if (e.ctrlKey && !e.shiftKey && k === "-") { setFont(fontSize - 1); return false; }
+  if (e.ctrlKey && !e.shiftKey && k === "0") { setFont(13); return false; }
+  if (e.ctrlKey && !e.shiftKey && k === "w") { send({ t: "cmd", v: "close" }); return false; }
+  if (e.ctrlKey && e.shiftKey && (e.code === "Backquote" || k === "t")) { send({ t: "cmd", v: "new" }); return false; }
+  if (e.ctrlKey && k === "f" && e.shiftKey) { return true; }
+  return true;
+});
+document.addEventListener("contextmenu", (e) => {
+  // right click: copy the selection, or paste (Windows Terminal's way)
+  e.preventDefault();
+  if (term.hasSelection()) { navigator.clipboard.writeText(term.getSelection()); term.clearSelection(); }
+  else navigator.clipboard.readText().then((t) => t && term.paste(t));
+});
+
+function play(frames, ms) {
+  let i = 0;
+  const step = () => { if (i < frames.length) { term.write(frames[i++]); setTimeout(step, ms); } };
+  step();
+}
+
+if (host) {
+  host.addEventListener("message", (e) => {
+    let m = e.data;
+    if (typeof m === "string") { try { m = JSON.parse(m); } catch { return; } }
+    switch (m.t) {
+      case "out": term.write(decode(m.d)); break;
+      case "frames": setTimeout(() => play(m.v, m.ms || 45), m.after || 0); break;
+      case "title": document.title = m.v || "Terminal"; break;
+      case "exit":
+        ended = true;
+        document.getElementById("ended").style.display = "block";
+        document.title = "Terminal";
+        break;
+    }
+  });
+  start();
+} else {
+  // opened outside the app (a browser): a preview with no shell
+  term.write("\x1b[38;2;167;139;250mPulse terminal\x1b[0m: open it from Pulse Explorer to get a shell.\r\n");
+}
+term.focus();
+window.addEventListener("focus", () => term.focus());
+</script>
+</body>
+</html>

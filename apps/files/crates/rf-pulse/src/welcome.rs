@@ -81,7 +81,7 @@ fn git_line(i: &Info, branch: &str) -> String {
 }
 
 fn keys(i: &Info) -> (&'static str, &'static str, &'static str) {
-    if i.windows { ("Ctrl+Shift+D split right · Ctrl+Shift+E down", "Ctrl+Shift+[ ] move · Ctrl+Shift+W close", "Ctrl+K commands · Ctrl+` new terminal") }
+    if i.windows { ("Ctrl+Shift+C copy · Ctrl+Shift+V paste", "Ctrl+= Ctrl+- text size · Ctrl+0 reset", "Ctrl+Shift+` new terminal · Ctrl+W close") }
     else { ("⌘D split right · ⇧⌘D split down", "⌘[ ⌘] move between · ⌘W close", "⌘K commands · ⌃` new terminal") }
 }
 
@@ -122,7 +122,7 @@ fn full(i: &Info, cols: usize) -> Vec<String> {
     right.push(s.border(&"─".repeat(right_w)));
     right.push(String::new());
     let (k1, k2, k3) = keys(i);
-    right.push(s.title("Panes"));
+    right.push(s.title(if i.windows { "Keys" } else { "Panes" }));
     right.push(s.body(&line(k1.into())));
     right.push(s.body(&line(k2.into())));
     right.push(String::new());
@@ -224,7 +224,7 @@ mod tests {
         assert!(card.iter().all(|l| l.chars().count() == w));
         assert!(lines.iter().any(|l| l.contains("█▀▀▀▄")));
         assert!(lines.iter().any(|l| l.contains("⎇ main ↑1 · 3 changed")));
-        assert!(lines.iter().any(|l| l.contains("Ctrl+Shift+D split right")), "Windows keys");
+        assert!(lines.iter().any(|l| l.contains("Ctrl+Shift+C copy")), "Windows keys");
         assert!(plain(&info(false), 120).iter().any(|l| l.contains("⌘D split right")), "Mac keys");
         assert!(lines.iter().any(|l| l.contains("Try \"pnpm run dev\"")));
         assert!(lines.iter().any(|l| l.contains("$#::==!")));
