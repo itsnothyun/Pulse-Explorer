@@ -73,6 +73,148 @@ fn read_local_file_bytes(path: String) -> Result<Response, String> {
         .map_err(|err| format!("Failed to read file {}: {}", path, err))
 }
 
+/// A name for a new file next to another: one plain file name, nothing that could reach another folder.
+fn validate_save_name(name: &str) -> Result<(), String> {
+    let bad = name.is_empty()
+        || name.len() > 255
+        || name == "."
+        || name.contains("..")
+        || name.chars().any(|c| matches!(c, '/' | '\\' | ':' | '<' | '>' | '"' | '|' | '?' | '*') || c.is_control())
+        || name.trim() != name
+        || name.ends_with('.');
+    if bad {
+        Err(format!("Not a valid file name: {name}"))
+    } else {
+        Ok(())
+    }
+}
+
+/// The n-th name tried for `name`: `a.png`, then `a 2.png`, `a 3.png`… (the number goes before the extension).
+fn numbered_name(name: &str, n: u32) -> String {
+    if n <= 1 {
+        return name.to_string();
+    }
+    match name.rfind('.') {
+        Some(i) if i > 0 => format!("{} {n}{}", &name[..i], &name[i..]),
+        _ => format!("{name} {n}"),
+    }
+}
+
+/// `%XX` decoding for the header values `save_next_to` takes (headers are ASCII; paths are not).
+fn percent_decode(s: &str) -> Result<String, String> {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            let hex = s.get(i + 1..i + 3).ok_or("Bad percent-encoding")?;
+            out.push(u8::from_str_radix(hex, 16).map_err(|_| "Bad percent-encoding")?);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).map_err(|_| "Header is not UTF-8".to_string())
+}
+
+/// Writes `bytes` as a new file named `name` in `source`'s own folder. Never overwrites: if the name is taken it
+/// tries `name 2`, `name 3`… (create_new, so a file appearing meanwhile is not clobbered). Returns the final path.
+fn write_next_to(source: &std::path::Path, name: &str, bytes: &[u8]) -> Result<PathBuf, String> {
+    use std::io::Write;
+    validate_save_name(name)?;
+    if !source.is_file() {
+        return Err(format!("{} no longer exists", source.display()));
+    }
+    let folder = source.parent().ok_or("The file has no folder")?;
+    for n in 1..=9999 {
+        let target = folder.join(numbered_name(name, n));
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&target) {
+            Ok(mut f) => {
+                if let Err(err) = f.write_all(bytes).and_then(|_| f.sync_all()) {
+                    drop(f);
+                    let _ = std::fs::remove_file(&target);
+                    return Err(format!("Could not write {}: {err}", target.display()));
+                }
+                return Ok(target);
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(err) => return Err(format!("Could not create {}: {err}", target.display())),
+        }
+    }
+    Err(format!("No free name for {name}"))
+}
+
+/// Saves bytes from the web side (a frame or a clip from the player) next to the file they came from. The bytes are
+/// the raw IPC body (no JSON number array); the source path and the name come as percent-encoded headers
+/// `x-source` and `x-name`. Returns the path written.
+#[tauri::command]
+fn save_next_to(request: tauri::ipc::Request<'_>) -> Result<String, String> {
+    let header = |key: &str| -> Result<String, String> {
+        let raw = request.headers().get(key).ok_or(format!("Missing {key}"))?;
+        percent_decode(raw.to_str().map_err(|_| format!("Bad {key}"))?)
+    };
+    let source = header("x-source")?;
+    let name = header("x-name")?;
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err("Expected raw bytes".into());
+    };
+    write_next_to(std::path::Path::new(&source), &name, bytes).map(|p| p.to_string_lossy().to_string())
+}
+
+#[cfg(test)]
+mod save_next_to_tests {
+    use super::*;
+
+    #[test]
+    fn rejects_names_that_leave_the_folder() {
+        for bad in ["", ".", "..", "../x.png", "a/b.png", "a\\b.png", "x..png", "C:x.png", "a\0.png", " a.png", "a.png ", "a."] {
+            assert!(validate_save_name(bad).is_err(), "{bad:?} should be rejected");
+        }
+        for good in ["clip frame 0m12s.png", "My video clip 0m10s-0m25s.mp4", "été.gif"] {
+            assert!(validate_save_name(good).is_ok(), "{good:?} should be accepted");
+        }
+    }
+
+    #[test]
+    fn numbers_go_before_the_extension() {
+        assert_eq!(numbered_name("a.png", 1), "a.png");
+        assert_eq!(numbered_name("a.png", 2), "a 2.png");
+        assert_eq!(numbered_name("a b.c.mp4", 3), "a b.c 3.mp4");
+        assert_eq!(numbered_name("noext", 2), "noext 2");
+        assert_eq!(numbered_name(".hidden", 2), ".hidden 2");
+    }
+
+    #[test]
+    fn decodes_percent_headers() {
+        assert_eq!(percent_decode("%2FUsers%2Fme%2F%C3%A9t%C3%A9%20x.mp4").unwrap(), "/Users/me/été x.mp4");
+        assert!(percent_decode("%zz").is_err());
+        assert!(percent_decode("%2").is_err());
+    }
+
+    #[test]
+    fn writes_next_to_the_source_without_overwriting() {
+        let dir = std::env::temp_dir().join(format!("pulse-save-next-to-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let source = dir.join("movie.mp4");
+        std::fs::write(&source, b"src").unwrap();
+
+        let first = write_next_to(&source, "movie frame 0m12s.png", b"one").unwrap();
+        let second = write_next_to(&source, "movie frame 0m12s.png", b"two").unwrap();
+        let third = write_next_to(&source, "movie frame 0m12s.png", b"three").unwrap();
+        assert_eq!(first, dir.join("movie frame 0m12s.png"));
+        assert_eq!(second, dir.join("movie frame 0m12s 2.png"));
+        assert_eq!(third, dir.join("movie frame 0m12s 3.png"));
+        assert_eq!(std::fs::read(&first).unwrap(), b"one");
+        assert_eq!(std::fs::read(&second).unwrap(), b"two");
+
+        assert!(write_next_to(&source, "../escape.png", b"x").is_err());
+        assert!(write_next_to(&dir.join("gone.mp4"), "a.png", b"x").is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
 /// File types Pulse can open; Explorer history is filtered to these.
 const SUPPORTED_EXTENSIONS: &[&str] = &[
     "pdf", "docx", "doc", "odt", "rtf", "pptx", "ppt", "odp", "xlsx", "xls", "ods", "csv", "tsv",
@@ -347,41 +489,90 @@ fn reveal_in_explorer(path: String) -> Result<(), String> {
             .spawn()
             .map_err(|err| err.to_string())?;
     }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("/usr/bin/open")
+            .arg("-R")
+            .arg(&p)
+            .spawn()
+            .map_err(|err| err.to_string())?;
+    }
     Ok(())
 }
 
 /// The bundled file manager (apps/files, rustyfiles in Pulse colours). Installed next to the app as a resource;
-/// a dev build falls back to the release build in the workspace (`pnpm files:build`).
+/// a dev build falls back to the release build in the workspace (`pnpm files:build`, `pnpm files:build:mac`).
+/// On macOS it is the native Mac file manager (apps/files/macos), staged as "Pulse Explorer.app" inside ours.
+#[cfg(not(target_os = "macos"))]
+const FILE_MANAGER: (&str, &str) = ("rustyfiles.exe", "../../files/target/release/rustyfiles.exe");
+#[cfg(target_os = "macos")]
+const FILE_MANAGER: (&str, &str) = ("Pulse Explorer.app", "../../files/macos/build/Pulse Explorer.app");
+
 fn file_manager_exe(app: &AppHandle) -> Result<PathBuf, String> {
     let bundled = app
         .path()
         .resource_dir()
-        .map(|d| d.join("files").join("rustyfiles.exe"))
+        .map(|d| d.join("files").join(FILE_MANAGER.0))
         .ok();
-    let dev = cfg!(debug_assertions)
-        .then(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../files/target/release/rustyfiles.exe"));
+    let dev = cfg!(debug_assertions).then(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(FILE_MANAGER.1));
     bundled
         .into_iter()
         .chain(dev)
-        .find(|p| p.is_file())
+        .find(|p| p.exists())
         .ok_or_else(|| "The file manager is not installed (build it with `pnpm files:build`)".to_string())
+}
+
+/// What the file manager opens Pulse's file types with (rf-win `openrules`, the Mac app's OpenRules): this executable
+/// on Windows, our app bundle on macOS (where apps are opened as bundles).
+fn pulse_viewer_path() -> Option<PathBuf> {
+    let me = std::env::current_exe().ok()?;
+    #[cfg(target_os = "macos")]
+    {
+        // <bundle>.app/Contents/MacOS/PulseExplorer
+        let bundle = me.parent()?.parent()?.parent()?;
+        if bundle.extension().is_some_and(|e| e == "app") {
+            return Some(bundle.to_path_buf());
+        }
+    }
+    Some(me)
 }
 
 /// Starts the file manager at a folder, or at the folder holding a file; with no path, at its home page.
 /// `PULSE_VIEWER` tells it to open files Pulse can view with this executable (rf-win `openrules`).
+#[cfg(not(target_os = "macos"))]
 fn spawn_file_manager(app: &AppHandle, path: Option<PathBuf>) -> Result<std::process::Child, String> {
     let exe = file_manager_exe(app)?;
     let mut cmd = std::process::Command::new(&exe);
-    if let Ok(me) = std::env::current_exe() {
+    if let Some(me) = pulse_viewer_path() {
         cmd.env("PULSE_VIEWER", me);
     }
-    if let Some(p) = path {
-        let dir = if p.is_file() { p.parent().map(PathBuf::from) } else { Some(p) };
-        if let Some(d) = dir.filter(|d| d.is_dir()) {
-            cmd.arg(d);
-        }
+    if let Some(d) = folder_of(path) {
+        cmd.arg(d);
     }
     cmd.spawn().map_err(|err| err.to_string())
+}
+
+/// macOS: through LaunchServices (`open`), so a running file manager gets the folder in a new tab or window instead
+/// of a second copy starting. `-W` makes the child live as long as the file manager does.
+#[cfg(target_os = "macos")]
+fn spawn_file_manager(app: &AppHandle, path: Option<PathBuf>) -> Result<std::process::Child, String> {
+    let bundle = file_manager_exe(app)?;
+    let mut cmd = std::process::Command::new("/usr/bin/open");
+    cmd.arg("-W");
+    if let Some(me) = pulse_viewer_path() {
+        cmd.arg("--env").arg(format!("PULSE_VIEWER={}", me.display()));
+    }
+    cmd.arg("-a").arg(&bundle);
+    if let Some(d) = folder_of(path) {
+        cmd.arg(d);
+    }
+    cmd.spawn().map_err(|err| err.to_string())
+}
+
+fn folder_of(path: Option<PathBuf>) -> Option<PathBuf> {
+    let p = path?;
+    let dir = if p.is_file() { p.parent().map(PathBuf::from) } else { Some(p) };
+    dir.filter(|d| d.is_dir())
 }
 
 #[tauri::command]
@@ -429,6 +620,11 @@ fn open_with_other_app(path: String) -> Result<(), String> {
             .spawn()
             .map_err(|err| err.to_string())?;
     }
+    // macOS has no "Open with" chooser to show: the file goes to the app Finder opens it with.
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("/usr/bin/open").arg(&p).spawn().map_err(|err| err.to_string())?;
+    }
     Ok(())
 }
 
@@ -475,7 +671,7 @@ fn set_explorer_open_mode(app: AppHandle, state: State<'_, ExplorerOpenMode>, mo
 /// Screen rect (physical px) of the window the user was just in, normally the
 /// Explorer window they double-clicked from. Falls back to the cursor position.
 #[cfg(windows)]
-fn anchor_rect() -> (i32, i32, i32, i32) {
+fn anchor_rect(_app: &AppHandle) -> (i32, i32, i32, i32) {
     use windows::Win32::Foundation::{POINT, RECT};
     use windows::Win32::UI::WindowsAndMessaging::{GetCursorPos, GetForegroundWindow, GetWindowRect, GetWindowThreadProcessId};
     unsafe {
@@ -494,15 +690,35 @@ fn anchor_rect() -> (i32, i32, i32, i32) {
     }
 }
 
+/// Elsewhere: the cursor, which is over the file manager the file was opened from.
 #[cfg(not(windows))]
-fn anchor_rect() -> (i32, i32, i32, i32) {
-    (0, 0, 1280, 800)
+fn anchor_rect(app: &AppHandle) -> (i32, i32, i32, i32) {
+    match app.cursor_position() {
+        Ok(p) => (p.x as i32 - 1, p.y as i32 - 1, 2, 2),
+        Err(_) => (0, 0, 1280, 800),
+    }
 }
 
 /// Sizes the Quick View window to the anchor and centres it over it, clamped to
 /// the work area of the monitor the anchor is on.
 fn place_quickview(app: &AppHandle, win: &tauri::WebviewWindow) {
-    let (ax, ay, aw, ah) = anchor_rect();
+    // macOS: screens of different scales share one coordinate space in points, which physical pixels do not map onto;
+    // size in points and let AppKit centre it on the screen in use (the file manager's).
+    #[cfg(target_os = "macos")]
+    {
+        let _ = app;
+        let (mut w, mut h) = (1100.0_f64, 780.0_f64);
+        if let Ok(Some(m)) = win.current_monitor() {
+            let s = m.scale_factor();
+            w = w.min(m.work_area().size.width as f64 / s - 48.0);
+            h = h.min(m.work_area().size.height as f64 / s - 48.0);
+        }
+        let _ = win.set_size(tauri::LogicalSize::new(w.max(560.0), h.max(420.0)));
+        let _ = win.center();
+        return;
+    }
+    #[allow(unreachable_code)]
+    let (ax, ay, aw, ah) = anchor_rect(app);
     let (cx, cy) = (ax + aw / 2, ay + ah / 2);
     let monitors = app.available_monitors().unwrap_or_default();
     let monitor = monitors
@@ -539,6 +755,12 @@ fn show_quickview(app: &AppHandle, files: Vec<OpenWithFilePayload>) {
     if files.is_empty() {
         return;
     }
+    if let Some(shown) = app.try_state::<QuickViewShown>() {
+        shown.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+    // macOS: this process runs in the background (no Dock icon); come forward, over the file manager.
+    #[cfg(target_os = "macos")]
+    let _ = app.show();
     if let Some(win) = app.get_webview_window(QUICKVIEW) {
         place_quickview(app, &win);
         let _ = win.emit_to(QUICKVIEW, "pulse://quickview-files", &files);
@@ -550,9 +772,15 @@ fn show_quickview(app: &AppHandle, files: Vec<OpenWithFilePayload>) {
     if let Some(queue) = app.try_state::<QuickViewQueue>() {
         *queue.0.lock().expect("queue mutex poisoned") = files;
     }
-    let built = WebviewWindowBuilder::new(app, QUICKVIEW, WebviewUrl::App("index.html".into()))
-        .title("Pulse Explorer Quick View")
-        .decorations(false)
+    let builder = WebviewWindowBuilder::new(app, QUICKVIEW, WebviewUrl::App("index.html".into()))
+        .title("Pulse Explorer Quick View");
+    // macOS: a real window frame under a see-through title bar, so the corners, shadow and traffic lights are the
+    // system's, the same as the file manager's (the page leaves room for the lights: html.qv-mac in index.css).
+    #[cfg(target_os = "macos")]
+    let builder = builder.decorations(true).title_bar_style(tauri::TitleBarStyle::Overlay).hidden_title(true);
+    #[cfg(not(target_os = "macos"))]
+    let builder = builder.decorations(false);
+    let built = builder
         // The native DWM shadow: Windows draws the shadow outside the window (never
         // clipped), rounds the corners and provides resize edges.
         .shadow(true)
@@ -562,12 +790,7 @@ fn show_quickview(app: &AppHandle, files: Vec<OpenWithFilePayload>) {
         .transparent(true)
         .background_color(tauri::window::Color(9, 9, 9, 0))
         .theme(Some(tauri::Theme::Dark))
-        .effects(
-            tauri::window::EffectsBuilder::new()
-                .effect(tauri::window::Effect::Acrylic)
-                .color(tauri::window::Color(9, 9, 9, 200))
-                .build(),
-        )
+        .effects(quickview_effects())
         .resizable(true)
         .visible(false)
         .min_inner_size(560.0, 420.0)
@@ -580,6 +803,54 @@ fn show_quickview(app: &AppHandle, files: Vec<OpenWithFilePayload>) {
         }
         Err(err) => eprintln!("quick view: {err}"),
     }
+}
+
+/// Windows' acrylic; on macOS the dark HUD vibrancy with rounded corners (the frameless window has none).
+fn quickview_effects() -> tauri::utils::config::WindowEffectsConfig {
+    #[cfg(target_os = "macos")]
+    {
+        tauri::window::EffectsBuilder::new()
+            .effect(tauri::window::Effect::HudWindow)
+            .state(tauri::window::EffectState::Active)
+            .build()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        tauri::window::EffectsBuilder::new()
+            .effect(tauri::window::Effect::Acrylic)
+            .color(tauri::window::Color(9, 9, 9, 200))
+            .build()
+    }
+}
+
+/// Counts Quick View's showings, so a release scheduled before the last one can tell it is out of date.
+#[derive(Default)]
+struct QuickViewShown(std::sync::atomic::AtomicU64);
+
+/// How long a hidden Quick View keeps its page: opening the next file in that time is instant; after it, the page (and
+/// the web process behind it, a few hundred MB once documents and pictures were shown) is let go. With its last window
+/// gone this process ends too; the file manager keeps running, and the next file starts the viewer again (about a second).
+const QUICKVIEW_KEEP: std::time::Duration = std::time::Duration::from_secs(120);
+
+fn release_quickview_later(app: &AppHandle) {
+    let Some(shown) = app.try_state::<QuickViewShown>() else { return };
+    let at = shown.0.load(std::sync::atomic::Ordering::SeqCst);
+    let app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(QUICKVIEW_KEEP);
+        let still = app.try_state::<QuickViewShown>().is_some_and(|s| s.0.load(std::sync::atomic::Ordering::SeqCst) == at);
+        if !still {
+            return;
+        }
+        let h = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            if let Some(win) = h.get_webview_window(QUICKVIEW) {
+                if !win.is_visible().unwrap_or(true) {
+                    let _ = win.destroy();
+                }
+            }
+        });
+    });
 }
 
 /// Files waiting for a freshly created Quick View window.
@@ -597,7 +868,10 @@ fn close_quickview(app: AppHandle) {
         return;
     }
     if let Some(win) = app.get_webview_window(QUICKVIEW) {
+        // the player pauses with it (a hidden window would otherwise keep playing), and the page lets go of what it showed
+        let _ = win.emit_to(QUICKVIEW, "pulse://quickview-closed", ());
         let _ = win.hide();
+        release_quickview_later(&app);
     }
 }
 
@@ -646,6 +920,7 @@ fn main() {
                 .build(),
         )
         .manage(QuickViewQueue::default())
+        .manage(QuickViewShown::default())
         .invoke_handler(tauri::generate_handler![
             consume_startup_open_with_files,
             read_local_file_bytes,
@@ -657,7 +932,8 @@ fn main() {
             close_quickview,
             reveal_in_explorer,
             open_with_other_app,
-            open_file_manager
+            open_file_manager,
+            save_next_to
         ])
         .setup(move |app| {
             // Pulse Explorer has no window of its own any more: the file manager is the app and Quick View
@@ -665,14 +941,79 @@ fn main() {
             let handle = app.handle().clone();
             app.manage(ExplorerOpenMode(Mutex::new(read_explorer_mode(&handle))));
             app.manage(PendingStartupFiles::default());
+            #[cfg(target_os = "macos")]
+            {
+                // The file manager is the app in the Dock; this process only shows Quick View.
+                app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+                app.manage(MacStart::default());
+            }
             if file_manager_start {
                 app.manage(BehindFileManager);
+                // macOS hands files from Finder over after launch (RunEvent::Opened), not as arguments: wait a
+                // moment before deciding this start had no files.
+                #[cfg(target_os = "macos")]
+                {
+                    let handle = handle.clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(std::time::Duration::from_millis(600));
+                        let h = handle.clone();
+                        let _ = handle.run_on_main_thread(move || {
+                            let opened = h.state::<MacStart>().0.lock().map(|g| *g).unwrap_or(false);
+                            if !opened {
+                                start_as_file_manager(&h);
+                            }
+                        });
+                    });
+                }
+                #[cfg(not(target_os = "macos"))]
                 start_as_file_manager(&handle);
             } else {
                 show_quickview(&handle, startup_files.clone());
             }
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running Pulse Explorer");
+        .build(tauri::generate_context!())
+        .expect("error while running Pulse Explorer")
+        .run(|_app, _event| {
+            // The window's own close (macOS: the red traffic light) does what Esc does.
+            if let tauri::RunEvent::WindowEvent { label, event: tauri::WindowEvent::CloseRequested { api, .. }, .. } = &_event {
+                if label == QUICKVIEW {
+                    api.prevent_close();
+                    close_quickview(_app.clone());
+                    return;
+                }
+            }
+            // macOS: files opened from Finder or the file manager ("Open with", double click) arrive here.
+            #[cfg(target_os = "macos")]
+            match _event {
+                tauri::RunEvent::Opened { urls } => {
+                    let files: Vec<OpenWithFilePayload> = urls
+                        .iter()
+                        .filter_map(|u| u.to_file_path().ok())
+                        .filter_map(|p| inspect_cli_file_arg(&p.to_string_lossy()))
+                        .collect();
+                    if files.is_empty() {
+                        return;
+                    }
+                    if let Some(s) = _app.try_state::<MacStart>() {
+                        if let Ok(mut g) = s.0.lock() {
+                            *g = true;
+                        }
+                    }
+                    show_quickview(_app, files);
+                }
+                // Clicking the Dock icon / launching again while running: bring the file manager forward.
+                tauri::RunEvent::Reopen { has_visible_windows: false, .. } => {
+                    if let Err(err) = spawn_file_manager(_app, None) {
+                        eprintln!("file manager: {err}");
+                    }
+                }
+                _ => {}
+            }
+        });
 }
+
+/// macOS: set once Finder has handed this start a file, so it opens Quick View instead of the file manager.
+#[cfg(target_os = "macos")]
+#[derive(Default)]
+struct MacStart(Mutex<bool>);

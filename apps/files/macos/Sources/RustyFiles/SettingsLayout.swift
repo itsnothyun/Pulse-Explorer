@@ -199,14 +199,8 @@ enum Grouping {
 enum GitStatus {
     /// nil when the folder is not in a Git work tree.
     static func read(_ dir: URL) -> [String: String]? {
-        var d = dir
-        var root: URL?
-        while true {
-            if FileManager.default.fileExists(atPath: d.appendingPathComponent(".git").path) { root = d; break }
-            let up = d.deletingLastPathComponent()
-            if up.path == d.path { break }
-            d = up
-        }
+        // (on paths: the URL walk this was never ended outside a repository, see Repo.findGitRoot)
+        let root = Repo.findGitRoot(from: dir.standardizedFileURL.path)
         guard root != nil, FileManager.default.isExecutableFile(atPath: "/usr/bin/git") else { return nil }
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/git")

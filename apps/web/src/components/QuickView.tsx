@@ -26,6 +26,9 @@ import { categoryIcon } from './explorerIcons';
 import { Scanner, SegmentBar } from './pulse/Pixel';
 import { WindowControls } from './pulse/WindowControls';
 
+/** macOS gives Quick View the system's own frame and traffic lights. */
+const IS_MAC = typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform);
+
 type AppWindow = import('@tauri-apps/api/window').Window;
 
 /** Lucide, as the file manager draws it: 16 px for actions, 14 px in small controls. */
@@ -208,7 +211,7 @@ export function QuickView({ queue, onClose, onOpenInWorkspace, onDownload, stand
               </button>
             </div>
             <div className="flex-1" />
-            {win && !fullscreen && <WindowControls onClose={close} lucide />}
+            {win && !fullscreen && !IS_MAC && <WindowControls onClose={close} lucide />}
           </header>
 
           {/* Command bar */}

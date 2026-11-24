@@ -8,6 +8,7 @@ import {
   type QuickViewPayload,
 } from '../services/desktopBridge';
 import { QuickView } from './QuickView';
+import { PulsePlayer, isMediaPayload } from './PulsePlayer';
 
 /**
  * Root of the floating Quick View window. It keeps its own in-memory copy of
@@ -18,18 +19,46 @@ export function QuickViewWindow() {
   const importFiles = useWorkspaceStore((s) => s.importFiles);
   const [queue, setQueue] = useState<string[]>([]);
   const [batch, setBatch] = useState(0);
+  /** Video and audio go to Pulse's player, streamed from disk (never read into memory first). */
+  const [media, setMedia] = useState<QuickViewPayload[]>([]);
   const paths = useRef(new Map<string, string>());
+
+  /**
+   * This window stays alive behind the file manager, so nothing it reads may pile up: the files of earlier batches (their
+   * bytes, their loaded documents) are let go when new ones come and when the window closes. Only `keep` stays.
+   */
+  const release = (keep: string[] = []) => {
+    const store = useWorkspaceStore.getState();
+    const keepSet = new Set(keep);
+    for (const f of store.files) {
+      if (!keepSet.has(f.id)) store.permanentlyRemoveFile(f.id);
+    }
+    for (const id of [...paths.current.keys()]) if (!keepSet.has(id)) paths.current.delete(id);
+  };
 
   useEffect(() => {
     const root = document.documentElement;
+    // macOS draws the window's frame and traffic lights itself (apps/desktop main.rs show_quickview)
+    const mac = /Mac/i.test(navigator.platform);
     root.classList.add('qv-window');
-    return () => root.classList.remove('qv-window');
+    if (mac) root.classList.add('qv-mac');
+    return () => root.classList.remove('qv-window', 'qv-mac');
   }, []);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let cancelled = false;
-    const onFiles = async (files: QuickViewPayload[]) => {
+    const onFiles = async (all: QuickViewPayload[]) => {
+      // a batch that starts with a video or a song plays (its media files make the playlist); the rest is viewed
+      if (all.length > 0 && isMediaPayload(all[0])) {
+        release();
+        setQueue([]);
+        setMedia(all.filter(isMediaPayload));
+        setBatch((b) => b + 1);
+        return;
+      }
+      setMedia([]);
+      const files = all;
       const state = useWorkspaceStore.getState();
       const ids: string[] = [];
       for (const f of files) {
@@ -51,6 +80,7 @@ export function QuickViewWindow() {
         }
       }
       if (ids.length > 0) {
+        release(ids);
         setQueue(ids);
         setBatch((b) => b + 1);
       }
@@ -65,6 +95,27 @@ export function QuickViewWindow() {
     };
   }, [importFiles]);
 
+  // closed (Esc, its close button, the shell): what it showed goes, so the hidden window holds nothing
+  useEffect(() => {
+    let un: (() => void) | undefined;
+    let cancelled = false;
+    void import('@tauri-apps/api/event').then(({ listen }) =>
+      listen('pulse://quickview-closed', () => {
+        setQueue([]);
+        setMedia([]);
+        window.setTimeout(() => release(), 0);
+      }).then((fn) => {
+        if (cancelled) fn();
+        else un = fn;
+      })
+    );
+    return () => {
+      cancelled = true;
+      un?.();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const download = (file: DetectedFile) => {
     const buffer = useWorkspaceStore.getState().fileBuffers[file.id];
     if (!buffer) return;
@@ -75,6 +126,19 @@ export function QuickViewWindow() {
     a.click();
     URL.revokeObjectURL(url);
   };
+
+  if (media.length > 0) {
+    return (
+      <PulsePlayer
+        key={batch}
+        items={media}
+        onClose={() => {
+          setMedia([]);
+          void closeQuickViewWindow();
+        }}
+      />
+    );
+  }
 
   if (queue.length === 0) return null;
 

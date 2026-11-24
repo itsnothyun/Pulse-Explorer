@@ -35,9 +35,31 @@ enum OpenRules {
 
     /// The app a double click uses for `url`, if a list says so.
     static func opener(for url: URL) -> URL? {
-        guard let r = rule(for: url), r.onOpen, let first = r.apps.first, FileManager.default.fileExists(atPath: first) else { return nil }
+        guard let r = rule(for: url), r.onOpen, let first = r.apps.first, FileManager.default.fileExists(atPath: first) else {
+            // Pulse's build: the types Pulse Explorer views open in its Quick View unless a list of the user's says otherwise
+            if rule(for: url) == nil, pulseExts.contains(url.pathExtension.lowercased()) { return pulseViewer }
+            return nil
+        }
         return URL(fileURLWithPath: first)
     }
+
+    /// The types Pulse Explorer's viewer opens on a double click (rf-win openrules.rs `PULSE_EXTS`). Archives are left
+    /// out: they open like folders.
+    static let pulseExts: Set<String> = [
+        "pdf", "docx", "doc", "odt", "rtf", "pptx", "ppt", "odp", "xlsx", "xls", "ods", "csv", "tsv", "epub", "fb2", "png", "jpg",
+        "jpeg", "webp", "gif", "bmp", "ico", "svg", "md", "json", "yaml", "yml", "toml", "xml", "log", "ini", "txt",
+        // video and audio: Pulse's player (the Quick View window, PulsePlayer.tsx)
+        "mp4", "m4v", "mov", "webm", "mkv", "avi", "ogv", "mp3", "m4a", "wav", "flac", "ogg", "oga", "opus", "aac",
+    ]
+
+    /// Pulse Explorer's app: `PULSE_VIEWER`, which it sets when it starts the file manager, else the app this one is
+    /// installed in (<Pulse Explorer.app>/Contents/Resources/files/Pulse Explorer.app).
+    static let pulseViewer: URL? = {
+        let env = ProcessInfo.processInfo.environment["PULSE_VIEWER"].map(URL.init(fileURLWithPath:))
+        var installed = Bundle.main.bundleURL
+        for _ in 0..<4 { installed.deleteLastPathComponent() }
+        return [env, installed].compactMap { $0 }.first { $0.pathExtension == "app" && FileManager.default.fileExists(atPath: $0.path) }
+    }()
 
     static func appName(_ path: String) -> String { FileManager.default.displayName(atPath: path) }
 
@@ -144,7 +166,7 @@ extension SettingsContent {
         return [
             .table(
                 title: String(localized: "Apps for kinds of files"),
-                detail: String(localized: "The first app of a list opens such files on a double click; all of them come first under “Open with”. Only rustyfiles follows these lists."),
+                detail: String(localized: "The first app of a list opens such files on a double click; all of them come first under “Open with”. Only Pulse Explorer follows these lists."),
                 icon: "file-type",
                 entries: rules.map { r in
                     let apps = r.apps.isEmpty ? String(localized: "No apps yet: add one.") : r.apps.map(OpenRules.appName).joined(separator: " · ")

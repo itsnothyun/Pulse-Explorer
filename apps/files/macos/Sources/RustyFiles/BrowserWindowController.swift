@@ -1,4 +1,5 @@
 import AppKit
+import PulseKit
 
 /// One tab: its folder, its own back/forward history, and what to restore when it comes back.
 @MainActor
@@ -14,7 +15,14 @@ final class BrowserTab {
     var scrollY: CGFloat?
     var loadID = 0
 
-    init(url: URL) { self.url = url.standardizedFileURL }
+    init(url: URL) { self.url = url.isFileURL ? url.standardizedFileURL : url }
+
+    /// Pulse Explorer's browser tabs (WebTabs.swift): a web page or an .html file, shown by `page`.
+    var isWeb: Bool { WebAddress.isWeb(url) }
+    var page: WebPage?
+    /// Terminal tabs (TerminalTabs.swift): a shell, shown by `term`.
+    var isTerminal: Bool { TerminalAddress.isTerminal(url) }
+    var term: TerminalPage?
 
     /// The Settings page is a place a tab goes to, like a folder (Location::Settings on Windows).
     static let settingsURL = URL(string: "rustyfiles:settings")!
@@ -23,14 +31,23 @@ final class BrowserTab {
     var isSettings: Bool { url == Self.settingsURL }
     var isHome: Bool { url == Self.homeURL }
     /// A page of the app's own rather than a folder.
-    var isPage: Bool { isSettings || isHome }
+    var isPage: Bool { isSettings || isHome || isWeb || isTerminal }
     /// A tag's results (rustyfiles:tag/<name>): the files that have it, from anywhere.
     var tagName: String? { TagStore.name(of: url) }
+    /// A search's results (rustyfiles:search?in=…&q=…, SearchPlace).
+    var search: (dir: URL, query: String)? { SearchPlace.parse(url) }
 
     var info: TabInfo {
         if isSettings { return TabInfo(title: String(localized: "Settings"), icon: "settings") }
         if isHome { return TabInfo(title: String(localized: "Home"), icon: "house") }
+        if isTerminal { return TabInfo(title: term?.title ?? String(localized: "Terminal"), icon: "square-terminal") }
+        if isWeb {
+            let title = page?.title ?? (url == WebAddress.blank ? String(localized: "New browser tab") : (url.isFileURL ? url.lastPathComponent : url.host ?? url.absoluteString))
+            return TabInfo(title: title, icon: "globe")
+        }
         if let tag = tagName { return TabInfo(title: tag, icon: "tag") }
+        if let s = search { return TabInfo(title: "“\(s.query)”", icon: "search") }
+        if TodayPlace.parse(url) != nil { return TabInfo(title: String(localized: "Changed today"), icon: "clock") }
         let fm = FileManager.default
         let home = fm.homeDirectoryForCurrentUser.standardizedFileURL
         if url == home { return TabInfo(title: fm.displayName(atPath: url.path), icon: "house") }
@@ -118,6 +135,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         window.contentView = frame
         applyMaterial()
         [sidebar, handle, list.card, navBar, titleBar].forEach(root.addSubview)
+        sidebar.isHidden = !sidebarShown
         root.onLayout = { [weak self] in self?.layoutRoot() }
 
         window.center()
@@ -148,27 +166,48 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         navBar.frame = NSRect(x: 0, y: Metrics.titleBarHeight, width: b.width, height: Metrics.navRowHeight)
         let top = Metrics.titleBarHeight + Metrics.navRowHeight
         let sw = sidebarShown ? sidebarWidth : 0
-        sidebar.isHidden = !sidebarShown
+        // while it slides away the sidebar stays in the view, going narrower and fading (toggleSidebar hides it after)
+        if sidebarShown { sidebar.isHidden = false }
         handle.isHidden = !sidebarShown
-        sidebar.frame = NSRect(x: 0, y: top, width: sw, height: b.height - top)
+        sidebar.alphaValue = sidebarShown ? 1 : 0
+        sidebar.frame = NSRect(x: 0, y: top, width: sidebarShown ? sw : sidebarWidth, height: b.height - top)
+        if !sidebarShown { sidebar.frame.origin.x = -sidebarWidth * 0.25 }
         handle.frame = NSRect(x: sw - 3, y: top, width: 6, height: b.height - top)
         // no sidebar: the card keeps the 8 px margin on the left too
         let left = sidebarShown ? sw : 8
         list.card.frame = NSRect(x: left, y: top, width: b.width - left - Metrics.cardRightMargin, height: b.height - top - Metrics.bottomSpacer)
+        for t in tabs {
+            t.page?.container.frame = list.card.frame
+            t.term?.container.frame = list.card.frame
+        }
     }
 
-    func windowDidBecomeKey(_ notification: Notification) { list.updateCommands() }
+    func windowDidBecomeKey(_ notification: Notification) {
+        list.updateCommands()
+        // back to a terminal tab's window: the keys go to its shell unless something else of the window has them
+        if tabs.indices.contains(active), let term = tab.term, let w = window,
+            !((w.firstResponder as? NSView)?.isDescendant(of: term.container) ?? false), !(w.firstResponder is NSTextView)
+        {
+            term.focus()
+        }
+    }
 
     /// Edit › Undo and Redo, ⌘Z and ⇧⌘Z, work on file operations (text being edited keeps its own).
     func windowWillReturnUndoManager(_ window: NSWindow) -> UndoManager? { FileUndo.shared.manager }
 
-    func windowWillClose(_ notification: Notification) { onClose?(self) }
+    func windowWillClose(_ notification: Notification) {
+        tabs.forEach { $0.term?.saveHistory(); $0.term?.terminateAll() }
+        onClose?(self)
+    }
 
     /// A setting changed: the list takes what concerns it; colours redraw everywhere (and
     /// lenses find their places again, or go, when the material changed).
     @objc private func settingsChanged(_ note: Notification) {
         let key = AppSettings.changedKey(note)
         if key == "material" || key == "theme" { applyMaterial() }
+        // terminals take the card's new look too
+        let p = Palette.of(list.card)
+        tabs.forEach { $0.term?.applyLook(p) }
         list.apply(settingKey: key)
         func redraw(_ v: NSView) {
             v.needsDisplay = true
@@ -226,6 +265,15 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     private func wire() {
         navBar.sidebarToggle.action = { [weak self] _ in self?.toggleSidebar(nil) }
         titleBar.plus.action = { [weak self] _ in self?.newTab(nil) }
+        // the "+" button's right click: a folder tab or a browser tab
+        titleBar.plus.menuProvider = { [weak self] in
+            let b = MenuBuilder()
+            b.add(String(localized: "New tab"), "plus", key: "t") { self?.newTab(nil) }
+            b.add(String(localized: "New browser tab"), "globe", key: "t", mods: [.command, .option]) { self?.newBrowserTab(nil) }
+            b.add(String(localized: "New terminal tab"), "square-terminal", key: "`", mods: [.control]) { self?.newTerminalTab(nil) }
+            return b.done()
+        }
+        list.onOpenWeb = { [weak self] url in self?.openTab(url, activate: true) }
         titleBar.strip.onSelect = { [weak self] i in self?.activate(i) }
         titleBar.strip.onClose = { [weak self] i in self?.closeTab(at: i) }
 
@@ -239,6 +287,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         omni.breadcrumb.onNavigate = { [weak self] url in self?.navigate(to: url) }
         omni.breadcrumb.onHome = { [weak self] in self?.goHome(nil) }
         omni.onSubmitPath = { [weak self] text in self?.submitPath(text) }
+        omni.onSearch = { [weak self] text in self?.searchSubfolders(text) }
         omni.onFilter = { [weak self] text in
             self?.list.filter = text
             self?.list.commandBar.filter.isOn = !text.isEmpty
@@ -298,7 +347,51 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         refreshTabs()
     }
 
+    /// What the card showed last (a tab, a page or a folder), so a change of it cross-fades and a refresh does not.
+    private var shownKey: (ObjectIdentifier, URL)?
+
     private func showTab() {
+        let key = (ObjectIdentifier(tab), tab.url)
+        if let k = shownKey, k.0 != key.0 || k.1 != key.1 { Motion.crossFade(list.card) }
+        shownKey = key
+        // a terminal is see-through to the window's glass: the list's card is put away while one is in front
+        list.card.isHidden = tab.isTerminal
+        // only the active tab's page shows; the card stays under it
+        for t in tabs where t !== tab {
+            t.page?.container.isHidden = true
+            t.term?.container.isHidden = true
+            t.term?.isShown = false
+        }
+        if tab.isTerminal {
+            let term = terminalPage(for: tab)
+            term.container.frame = list.card.frame
+            if term.container.isHidden || !term.isShown {
+                term.container.isHidden = false
+                Motion.fadeIn(term.container, duration: 0.14)
+            }
+            term.isShown = true
+            watch()
+            updateChrome()
+            // the shells start once the tab has its size (the welcome card is drawn to it)
+            root.layoutSubtreeIfNeeded()
+            term.beginPending()
+            term.focus()
+            // (once it is in the window and the window is key: typing goes to the shell from the first key)
+            DispatchQueue.main.async { [weak term] in term?.focus() }
+            return
+        }
+        if tab.isWeb {
+            let page = webPage(for: tab)
+            page.container.frame = list.card.frame
+            if page.container.isHidden || page.container.alphaValue < 1 {
+                page.container.isHidden = false
+                Motion.fadeIn(page.container)
+            }
+            watch()
+            updateChrome()
+            window?.makeFirstResponder(page.view)
+            return
+        }
         if tab.isSettings {
             list.showSettings()
         } else if tab.isHome {
@@ -327,7 +420,11 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
 
     override func newWindowForTab(_ sender: Any?) { newTab(sender) }
 
-    @objc func closeTab(_ sender: Any?) { closeTab(at: active) }
+    @objc func closeTab(_ sender: Any?) {
+        // a terminal split in panes: ⌘W closes the pane in front (the tab goes with its last one), as in Ghostty
+        if tab.isTerminal, let term = tab.term, term.panes.count > 1 { return term.closeFocused() }
+        closeTab(at: active)
+    }
 
     /// Tabs closed in this window, newest last ("Reopen closed tab", ⇧⌘T).
     private var closedTabs: [URL] = []
@@ -374,6 +471,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         saveTabState()
         let current = tabs[active]
         closedTabs += indices.map { tabs[$0].url }
+        indices.forEach { dropPage(tabs[$0]); dropTerminal(tabs[$0]) }
         tabs = keep.map { tabs[$0] }
         active = tabs.firstIndex { $0 === current } ?? min(keep.firstIndex { $0 > indices.min()! } ?? 0, tabs.count - 1)
         showTab()
@@ -385,6 +483,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         let b = MenuBuilder()
         let n = tabs.count
         b.add(String(localized: "New tab"), "plus", key: "t") { [weak self] in self?.newTab(nil) }
+        b.add(String(localized: "New browser tab"), "globe", key: "t", mods: [.command, .option]) { [weak self] in self?.newBrowserTab(nil) }
+        b.add(String(localized: "New terminal tab"), "square-terminal", key: "`", mods: [.control]) { [weak self] in self?.newTerminalTab(nil) }
         b.add(String(localized: "Duplicate tab"), "copy") { [weak self] in
             guard let self else { return }
             self.activate(i)
@@ -417,6 +517,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         }
         if i == active { saveTabState() }
         closedTabs.append(tabs[i].url)
+        dropPage(tabs[i])
+        dropTerminal(tabs[i])
         tabs.remove(at: i)
         if i < active || active >= tabs.count { active = max(active - 1, 0) }
         showTab()
@@ -431,10 +533,21 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     func navigate(to url: URL, selecting name: String? = nil) {
         let url = url.isFileURL ? url.standardizedFileURL : url
         guard url != tab.url else { return }
+        // (a terminal tab keeps its shell: a place clicked meanwhile opens in a tab of its own)
+        if tab.isTerminal, !TerminalAddress.isTerminal(url) { return openTab(url, activate: true) }
+        // a page going to another page stays in its WebKit history
+        if tab.isWeb, WebAddress.isWeb(url), let page = tab.page {
+            tab.url = url
+            page.load(url)
+            navBar.omnibar.end()
+            refreshTabs()
+            return updateChrome()
+        }
         saveTabState()
         tab.back.append(tab.url)
         tab.forward.removeAll()
         tab.url = url
+        CommandPalette.noteVisit(url)
         tab.selection = name.map { [$0] } ?? []
         tab.scrollY = nil
         navBar.omnibar.end()
@@ -444,6 +557,9 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
 
     /// Lists the tab's folder off the main thread: a slow or hung disk never stalls the window.
     private func load(_ t: BrowserTab, keepScroll: Bool = false) {
+        // a tab that left its page for a folder drops the page
+        if !t.isWeb, t.page != nil { dropPage(t) }
+        if !t.isTerminal, t.term != nil { dropTerminal(t) }
         t.loadID += 1
         let id = t.loadID
         let url = t.url
@@ -467,7 +583,12 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
             }
             let began = Date()
             let result: Result<Folder, Error>
-            if let tag = TagStore.name(of: url) {
+            if let today = TodayPlace.parse(url) {
+                result = .success(Folder.gathered(label: url.absoluteString, paths: TodayPlace.paths(today), column: column, ascending: ascending, foldersFirst: first, showHidden: hidden))
+            } else if let s = SearchPlace.parse(url) {
+                let paths = SearchPlace.run(s.dir, s.query)
+                result = .success(Folder.gathered(label: url.absoluteString, paths: paths, column: column, ascending: ascending, foldersFirst: first, showHidden: hidden))
+            } else if let tag = TagStore.name(of: url) {
                 let paths = TagStore.files(tagged: tag)
                 result = .success(Folder.gathered(label: url.absoluteString, paths: paths, column: column, ascending: ascending, foldersFirst: first, showHidden: hidden))
             } else {
@@ -585,13 +706,35 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         case .NotFound:
             return String(localized: "“\(name)” can’t be found.")
         case .PermissionDenied:
-            return String(localized: "rustyfiles can’t open “\(name)” because it doesn’t have permission. You can give it access in System Settings › Privacy & Security › Full Disk Access.")
+            return String(localized: "Pulse Explorer can’t open “\(name)” because it doesn’t have permission. You can give it access in System Settings › Privacy & Security › Full Disk Access.")
         default:
             return String(localized: "“\(name)” can’t be opened: \(error.localizedDescription)")
         }
     }
 
     private func updateChrome() {
+        if tab.isTerminal {
+            let dir = tab.term?.directory ?? TerminalAddress.directory(of: tab.url) ?? URL(fileURLWithPath: NSHomeDirectory())
+            navBar.back.isEnabled = (tab.term?.panes.count ?? 0) > 1
+            navBar.forward.isEnabled = (tab.term?.panes.count ?? 0) > 1
+            navBar.up.isEnabled = false
+            navBar.omnibar.breadcrumb.segments = BreadcrumbView.segments(for: dir)
+            navBar.omnibar.currentPath = dir.path
+            sidebar.selectedURL = nil
+            return
+        }
+        if tab.isWeb {
+            let page = tab.page
+            navBar.back.isEnabled = (page?.view.canGoBack ?? false) || !tab.back.isEmpty
+            navBar.forward.isEnabled = (page?.view.canGoForward ?? false) || !tab.forward.isEmpty
+            navBar.up.isEnabled = false
+            let shown = page?.url ?? tab.url
+            let text = shown == WebAddress.blank ? "" : (shown.isFileURL ? shown.path : shown.absoluteString)
+            navBar.omnibar.breadcrumb.segments = [BreadcrumbView.Segment(title: text.isEmpty ? String(localized: "New browser tab") : text, url: shown)]
+            navBar.omnibar.currentPath = text
+            sidebar.selectedURL = nil
+            return
+        }
         navBar.back.isEnabled = !tab.back.isEmpty
         navBar.forward.isEnabled = !tab.forward.isEmpty
         navBar.up.isEnabled = !tab.isHome && (tab.isSettings || tab.tagName != nil || tab.url.path != "/")
@@ -599,6 +742,11 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
             navBar.omnibar.breadcrumb.segments = [BreadcrumbView.Segment(title: String(localized: "Settings"), url: BrowserTab.settingsURL)]
         } else if tab.isHome {
             navBar.omnibar.breadcrumb.segments = [BreadcrumbView.Segment(title: String(localized: "Home"), url: BrowserTab.homeURL)]
+        } else if let dir = TodayPlace.parse(tab.url) {
+            navBar.omnibar.breadcrumb.segments = BreadcrumbView.segments(for: dir) + [BreadcrumbView.Segment(title: String(localized: "Changed today"), url: tab.url)]
+        } else if let s = tab.search {
+            navBar.omnibar.breadcrumb.segments = BreadcrumbView.segments(for: s.dir)
+                + [BreadcrumbView.Segment(title: String(localized: "Search “\(s.query)”"), url: tab.url)]
         } else if let tag = tab.tagName {
             navBar.omnibar.breadcrumb.segments = [BreadcrumbView.Segment(title: String(localized: "Tags"), url: BrowserTab.homeURL), BreadcrumbView.Segment(title: tag, url: tab.url)]
         } else {
@@ -620,9 +768,16 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
             }
         }
         let path = (text.trimmingCharacters(in: .whitespaces) as NSString).expandingTildeInPath
-        let url = path.hasPrefix("/") ? URL(fileURLWithPath: path) : tab.url.appendingPathComponent(path)
+        // a web address opens as a page (Pulse's browser tabs); a file or folder by that name comes first
+        let base = tab.url.isFileURL && !tab.isWeb ? tab.url : FileManager.default.homeDirectoryForCurrentUser
+        let url = path.hasPrefix("/") ? URL(fileURLWithPath: path) : base.appendingPathComponent(path)
         var isDir: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) else {
+        let exists = FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir)
+        if let web = WebAddress.parse(trimmed), !(exists && !path.hasPrefix("http")) {
+            return navigate(to: web)
+        }
+        if exists, !isDir.boolValue, WebAddress.isHTMLFile(url) { return navigate(to: url) }
+        guard exists else {
             // Files › Run programs from the address bar
             if AppSettings.addressCommands, !tab.isPage, AddressCommand.run(text, in: tab.url) { return }
             showError(String(localized: "“\(text)” can’t be found."))
@@ -647,6 +802,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     // MARK: actions (menus, buttons, keys)
 
     @objc func goBack(_ sender: Any?) {
+        if tab.isTerminal { tab.term?.cycle(-1); return }
+        if tab.isWeb, let page = tab.page, page.view.canGoBack { page.view.goBack(); return }
         guard let url = tab.back.popLast() else { return }
         saveTabState()
         tab.forward.append(tab.url)
@@ -658,6 +815,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     }
 
     @objc func goForward(_ sender: Any?) {
+        if tab.isTerminal { tab.term?.cycle(1); return }
+        if tab.isWeb, let page = tab.page, page.view.canGoForward { page.view.goForward(); return }
         guard let url = tab.forward.popLast() else { return }
         saveTabState()
         tab.back.append(tab.url)
@@ -671,8 +830,10 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     @objc func goUp(_ sender: Any?) {
         // Settings goes up to Home, as on Windows
         if tab.isSettings { return goHome(sender) }
-        if tab.isHome { return }
+        if tab.isHome || tab.isWeb { return }
         if tab.tagName != nil { return goHome(sender) }
+        if let s = tab.search { return navigate(to: s.dir) }
+        if let dir = TodayPlace.parse(tab.url) { return navigate(to: dir) }
         let parent = tab.url.deletingLastPathComponent()
         guard parent.path != tab.url.path else { return }
         navigate(to: parent, selecting: AppSettings.upSelectsPrevious ? tab.url.lastPathComponent : nil)
@@ -691,6 +852,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
 
     @objc func refresh(_ sender: Any?) {
         if tab.isHome { return list.reloadHome() }
+        if tab.isTerminal { return }
+        if tab.isWeb { tab.page?.view.reload(); return }
         reload()
     }
     @objc func openSelection(_ sender: Any?) { list.openSelected() }
@@ -710,7 +873,12 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     func demoMenu(item: Bool) {
         if item { list.table.selectRowIndexes([0], byExtendingSelection: false) } else { list.table.deselectAll(nil) }
         let menu = list.contextMenu()
-        menu.popUp(positioning: nil, at: NSPoint(x: 300, y: item ? 20 : 200), in: list.table)
+        let at = NSPoint(x: 300, y: item ? 20 : 200)
+        if Motion.on, let w = list.table.window {
+            PulseMenu.show(menu, for: nil, in: list.table, at: w.convertPoint(toScreen: list.table.convert(at, to: nil)))
+        } else {
+            menu.popUp(positioning: nil, at: at, in: list.table)
+        }
     }
 
     func openSettings(page: SettingsPage) {
@@ -749,17 +917,47 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         navBar.statusCenter.iconSize = sc.isBusy ? 14 : 16
         navBar.statusCenter.needsDisplay = true
     }
-    @objc func focusSearch(_ sender: Any?) { navBar.omnibar.mode == .filter ? navBar.omnibar.end() : navBar.omnibar.begin(.filter) }
+    @objc func focusSearch(_ sender: Any?) {
+        if tab.isTerminal { return findInTerminal() }
+        navBar.omnibar.mode == .filter ? navBar.omnibar.end() : navBar.omnibar.begin(.filter) }
     @objc func focusAddress(_ sender: Any?) { navBar.omnibar.begin(.path) }
+    /// ⌘K: every command and place, by typing (CommandPalette.swift).
+    @objc func showCommandPalette(_ sender: Any?) { CommandPalette.toggle(for: self) }
+    /// ⇧⌘F: the search field for this folder and everything under it.
+    @objc func focusDeepSearch(_ sender: Any?) { navBar.omnibar.begin(.search) }
+
+    private func searchSubfolders(_ text: String) {
+        let dir = tab.search?.dir ?? (tab.url.isFileURL && !tab.isWeb ? tab.url : FileManager.default.homeDirectoryForCurrentUser)
+        navigate(to: SearchPlace.url(in: dir, query: text))
+    }
     @objc func newFolder(_ sender: Any?) { list.newFolder() }
     @objc func cut(_ sender: Any?) { list.cutItems() }
     @objc func copy(_ sender: Any?) { list.copyItems() }
-    @objc func paste(_ sender: Any?) { list.pasteItems() }
+    /// ⌘V: files copied are pasted as themselves; otherwise a picture, PDF, link or text on the clipboard becomes a file.
+    @objc func paste(_ sender: Any?) {
+        if Clipboard.hasFiles { return list.pasteItems() }
+        if let dir = list.url, dir.isFileURL, list.archiveIsNil { PasteAsFile.paste(into: dir, list: list) }
+    }
+
+    // Pulse's tools (PulseFeatures.swift, PulseWindows.swift)
+    @objc func saveWorkspace(_ sender: Any?) { WorkspaceActions.saveCurrent(self) }
+    @objc func toggleShelf(_ sender: Any?) { ShelfPanel.shared.toggle() }
+    @objc func findSpace(_ sender: Any?) {
+        guard tab.url.isFileURL, !tab.isWeb else { return NSSound.beep() }
+        DiskLensWindow.show(tab.url)
+    }
+    @objc func changedToday(_ sender: Any?) {
+        let dir = TodayPlace.parse(tab.url) ?? (tab.url.isFileURL && !tab.isWeb ? tab.url : FileManager.default.homeDirectoryForCurrentUser)
+        navigate(to: TodayPlace.url(in: dir))
+    }
     @objc func rename(_ sender: Any?) { list.beginRename() }
     @objc func moveToTrash(_ sender: Any?) { list.trashSelected() }
     @objc func toggleQuickLook(_ sender: Any?) { list.toggleQuickLook() }
     @objc func showDetails(_ sender: Any?) { list.setViewMode(.details) }
     @objc func showTiles(_ sender: Any?) { list.setViewMode(.tiles) }
+    @objc func zoomIn(_ sender: Any?) { if let t = tab.term { t.zoom(1) } else { list.zoom(1) } }
+    @objc func zoomOut(_ sender: Any?) { if let t = tab.term { t.zoom(-1) } else { list.zoom(-1) } }
+    @objc func zoomReset(_ sender: Any?) { if let t = tab.term { t.zoom(0) } else { list.zoom(0) } }
 
     /// Properties of the selection, or of the folder shown when nothing is selected (⌘I).
     @objc func showProperties(_ sender: Any?) { list.showProperties() }
@@ -773,20 +971,141 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     @objc func toggleSidebar(_ sender: Any?) {
         sidebarShown.toggle()
         UserDefaults.standard.set(!sidebarShown, forKey: "sidebarHidden")
-        root.needsLayout = true
+        let shown = sidebarShown
+        if shown {
+            // it comes in from a little to the left, faded, at its full width
+            sidebar.isHidden = false
+            sidebar.alphaValue = 0
+        }
+        Motion.animate(0.26, { [self] in
+            layoutRoot()
+            root.layoutSubtreeIfNeeded()
+        }, completion: { [weak self] in
+            guard let self, !self.sidebarShown, !shown else { return }
+            self.sidebar.isHidden = true
+        })
+    }
+
+    // MARK: terminal tabs (TerminalTabs.swift)
+
+    /// A terminal in a new tab, in the folder shown (else the home folder); ⌃` and the "+" button's menu.
+    @objc func newTerminalTab(_ sender: Any?) {
+        let dir = (tab.term?.directory) ?? (tab.url.isFileURL && !tab.isWeb ? tab.url : FileManager.default.homeDirectoryForCurrentUser)
+        openTab(TerminalAddress.url(in: dir), activate: true)
+    }
+
+    @objc func splitTerminalRight(_ sender: Any?) {
+        guard tab.isTerminal else { return newTerminalTab(sender) }
+        tab.term?.split(vertical: true)
+    }
+
+    @objc func splitTerminalDown(_ sender: Any?) {
+        guard tab.isTerminal else { return newTerminalTab(sender) }
+        tab.term?.split(vertical: false)
+    }
+
+    /// Every terminal's output kept for next time (Pulse quitting).
+    func saveTerminalHistories() { tabs.forEach { $0.term?.saveHistory() } }
+
+    /// Brings `page`'s tab to the front (the Agents panel, a notification).
+    func showTerminal(_ page: TerminalPage) {
+        guard let i = tabs.firstIndex(where: { $0.term === page }) else { return }
+        activate(i)
+    }
+
+    /// A terminal in a new tab at `dir` ("Open terminal here").
+    func openTerminal(at dir: URL) { openTab(TerminalAddress.url(in: dir), activate: true) }
+
+    @objc func showAgents(_ sender: Any?) { AgentsPanel.shared.toggle() }
+
+    /// The terminal tab's find bar (⌘F in a terminal: search its scrollback).
+    private func findInTerminal() {
+        guard let view = tab.term?.focusedView else { return }
+        let item = NSMenuItem()
+        item.tag = Int(NSFindPanelAction.showFindPanel.rawValue)
+        view.performFindPanelAction(item)
+    }
+
+    /// The terminal of the tab in front, if it is one (a pane's click finds its page through this).
+    var terminalPageInFront: TerminalPage? { tabs.indices.contains(active) ? tab.term : nil }
+
+    private func terminalPage(for t: BrowserTab) -> TerminalPage {
+        if let p = t.term { return p }
+        let dir = TerminalAddress.directory(of: t.url) ?? FileManager.default.homeDirectoryForCurrentUser
+        let id = TerminalAddress.id(of: t.url) ?? UUID().uuidString
+        t.url = TerminalAddress.url(in: dir, id: id)
+        let p = TerminalPage(directory: dir, id: id)
+        t.term = p
+        TerminalRegistry.shared.add(p, in: self)
+        p.tabTitle = { [weak t] in t?.info.title ?? "" }
+        root.addSubview(p.container, positioned: .above, relativeTo: list.card)
+        p.applyLook(Palette.of(list.card))
+        p.onChange = { [weak self, weak t] in
+            guard let self, let t else { return }
+            // the tab's address follows the shell, so a restored session opens where it was
+            if let d = t.term?.directory, let id = t.term?.id { t.url = TerminalAddress.url(in: d, id: id) }
+            self.refreshTabs()
+            if t === self.tab { self.updateChrome() }
+        }
+        p.onEmpty = { [weak self, weak t] in
+            guard let self, let t, let i = self.tabs.firstIndex(where: { $0 === t }) else { return }
+            self.closeTab(at: i)
+        }
+        return p
+    }
+
+    /// Ends a tab's shells. `keepHistory`: its output stays saved for a restart (a window closing); a tab closed by the
+    /// user forgets it.
+    private func dropTerminal(_ t: BrowserTab, keepHistory: Bool = false) {
+        if let term = t.term {
+            if keepHistory { term.saveHistory() } else { TerminalHistory.remove(id: term.id) }
+        }
+        t.term?.terminateAll()
+        t.term?.container.removeFromSuperview()
+        t.term = nil
+    }
+
+    // MARK: browser tabs (WebTabs.swift)
+
+    /// A new tab on a blank page with the address field ready for a URL (workspace.rs `open_browser_tab`).
+    @objc func newBrowserTab(_ sender: Any?) {
+        openTab(WebAddress.blank, activate: true)
+        navBar.omnibar.begin(.path)
+    }
+
+    /// The tab's page, made the first time the tab shows.
+    private func webPage(for t: BrowserTab) -> WebPage {
+        if let p = t.page { return p }
+        let p = WebPage()
+        t.page = p
+        root.addSubview(p.container, positioned: .above, relativeTo: list.card)
+        p.onChange = { [weak self, weak t] in
+            guard let self, let t, let page = t.page else { return }
+            if let u = page.url, u != t.url, WebAddress.isWeb(u) { t.url = u }
+            self.refreshTabs()
+            if t === self.tab { self.updateChrome() }
+        }
+        p.onNewTab = { [weak self] url in self?.openTab(url, activate: true) }
+        if t.url != WebAddress.blank { p.load(t.url) }
+        return p
+    }
+
+    private func dropPage(_ t: BrowserTab) {
+        t.page?.container.removeFromSuperview()
+        t.page = nil
     }
 
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         let selected = !list.selectedNames.isEmpty
         switch item.action {
-        case #selector(goBack(_:)): return !tab.back.isEmpty
-        case #selector(goForward(_:)): return !tab.forward.isEmpty
-        case #selector(goUp(_:)): return tab.url.path != "/"
+        case #selector(goBack(_:)): return tab.isTerminal ? (tab.term?.panes.count ?? 0) > 1 : !tab.back.isEmpty
+        case #selector(goForward(_:)): return tab.isTerminal ? (tab.term?.panes.count ?? 0) > 1 : !tab.forward.isEmpty
+        case #selector(goUp(_:)): return !tab.isWeb && tab.url.path != "/"
         case #selector(openSelection(_:)), #selector(cut(_:)), #selector(BrowserWindowController.copy(_:) as (BrowserWindowController) -> (Any?) -> Void), #selector(moveToTrash(_:)),
             #selector(toggleQuickLook(_:)):
             return selected
-        case #selector(rename(_:)): return list.selectedNames.count == 1
-        case #selector(paste(_:)): return Clipboard.hasFiles && list.folder != nil
+        case #selector(rename(_:)): return !list.selectedNames.isEmpty
+        case #selector(paste(_:)): return list.folder != nil && (Clipboard.hasFiles || (list.url?.isFileURL == true && PasteAsFile.available))
         case #selector(newFolder(_:)): return list.folder != nil
         case #selector(selectNextTab(_:)), #selector(selectPreviousTab(_:)): return tabs.count > 1
         case #selector(reopenClosedTab(_:)): return !closedTabs.isEmpty

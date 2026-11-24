@@ -89,13 +89,8 @@ enum Editors {
         case "always": return true
         case "never": return false
         default:
-            var d = dir
-            while true {
-                if FileManager.default.fileExists(atPath: d.appendingPathComponent(".git").path) { return true }
-                let up = d.deletingLastPathComponent()
-                if up.path == d.path { return false }
-                d = up
-            }
+            // (on paths: a URL walk never ends outside a repository, see Repo.findGitRoot)
+            return Repo.findGitRoot(from: dir.standardizedFileURL.path) != nil
         }
     }
 
@@ -246,7 +241,7 @@ extension SettingsContent {
         return [
             .section(String(localized: "Starting and closing")),
             .card(
-                title: String(localized: "Open rustyfiles when you log in"), detail: nil, icon: "power",
+                title: String(localized: "Open Pulse Explorer when you log in"), detail: nil, icon: "power",
                 control: .toggle(get: { login }, set: { on in
                     do {
                         if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
@@ -258,9 +253,9 @@ extension SettingsContent {
                 detail: String(localized: "A new window then opens at once, and Ferry keeps receiving."), icon: "app-window",
                 control: .toggle(get: { AppSettings.keepRunning }, set: { AppSettings.keepRunning = $0 })),
             .card(
-                title: String(localized: "Open archives with rustyfiles"),
+                title: String(localized: "Open archives with Pulse Explorer"),
                 detail: String(localized: "ZIP, 7z and RAR files opened from Finder or other apps open here, like folders."), icon: "archive",
-                control: .buttons([(String(localized: "Make rustyfiles the default"), { ArchiveDefaults.claim() })])),
+                control: .buttons([(String(localized: "Make Pulse Explorer the default"), { ArchiveDefaults.claim() })])),
             .section(String(localized: "Copying")),
             .card(
                 title: String(localized: "Show progress"), detail: nil, icon: "gauge",
@@ -269,7 +264,7 @@ extension SettingsContent {
                     get: { AppSettings.progressPlace }, set: { AppSettings.progressPlace = $0 })),
             .card(
                 title: String(localized: "Notify when long operations finish"),
-                detail: String(localized: "Copies, moves and archives that took more than 10 seconds while rustyfiles was in the background."), icon: "bell",
+                detail: String(localized: "Copies, moves and archives that took more than 10 seconds while Pulse Explorer was in the background."), icon: "bell",
                 control: .toggle(get: { AppSettings.notifyLongOperations }, set: { AppSettings.notifyLongOperations = $0 })),
             .card(
                 title: String(localized: "Check copies"), detail: String(localized: "Fast: size and date. Full: the content, read back."), icon: "shield-check",

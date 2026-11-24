@@ -537,7 +537,7 @@ impl Render for LevelView {
             }
             let dx = if level == 0 { 0. } else { -6. };
             let dy = if level == 0 { -6. } else { 0. };
-            el.with_animation("menu-level-in", Animation::new(Duration::from_millis(180)).with_easing(ease_out_quint()), move |el, t| {
+            el.with_animation("menu-level-in", Animation::new(Duration::from_millis(200)).with_easing(ease_out_quint()), move |el, t| {
                 let k = 1. - t;
                 el.opacity(t).left(px(dx * k)).top(px(dy * k))
             })
@@ -991,8 +991,28 @@ impl MenuView {
                 list = list.child(liquid::highlight_capsule(top, &m, p.dark));
             }
         }
+        let animate = crate::settings::animations();
         for (ix, item) in items.iter().enumerate() {
-            list = list.child(self.render_row(lv, ix, item, column, p, cx));
+            let row = self.render_row(lv, ix, item, column, p, cx);
+            if !animate {
+                list = list.child(row);
+                continue;
+            }
+            // the rows follow the panel in one after another (14 ms apart, the first ten), each a short fade with a few
+            // pixels of drop, so the menu unfolds from where it opened instead of appearing at once
+            let delay = ix.min(10) as f32 * 14.;
+            let run = 160. + delay;
+            list = list.child(
+                div().relative().child(row).with_animation(
+                    ("menu-row-in", lv * 1000 + ix),
+                    Animation::new(Duration::from_millis(run as u64)),
+                    move |el, t| {
+                        let local = ((t * run - delay) / 160.).clamp(0., 1.);
+                        let k = ease_out_quint()(local);
+                        el.opacity(k).top(px(-4. * (1. - k)))
+                    },
+                ),
+            );
         }
         v_flex()
             .w_full()

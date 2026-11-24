@@ -1,4 +1,5 @@
 import AppKit
+import UserNotifications
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -10,7 +11,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// New windows open the Home page, as on Windows.
     private var home: URL { BrowserTab.homeURL }
 
+    private var zoomKeys: Any?
+
+    /// ⌃+ / ⌃− / ⌃0 (as Ctrl on Windows) and ⌘= (the + key without Shift) zoom too; the menu has ⌘+ / ⌘− / ⌘0.
+    private func watchZoomKeys() {
+        zoomKeys = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
+            // ⇧⌘D in a terminal tab splits it downward (Ghostty's key); elsewhere it goes on to Go › Desktop
+            if e.modifierFlags.intersection([.command, .shift, .control, .option]) == [.command, .shift], e.charactersIgnoringModifiers?.lowercased() == "d",
+                let front = self?.frontController, front.terminalPageInFront != nil, front.window?.isKeyWindow == true
+            {
+                front.splitTerminalDown(nil)
+                return nil
+            }
+            let mods = e.modifierFlags.intersection([.command, .control, .option])
+            guard mods == [.control] || mods == [.command], let c = e.charactersIgnoringModifiers,
+                let front = self?.frontController, front.window?.isKeyWindow == true,
+                // in a terminal, ⌃ keys belong to the shell (⌃- is undo there)
+                !(mods == [.control] && front.terminalPageInFront != nil),
+                !(front.window?.firstResponder is NSTextView)
+            else { return e }
+            switch (c, mods) {
+            case ("=", _), ("+", [.control]): front.zoomIn(nil)
+            case ("-", [.control]), ("_", [.control]): front.zoomOut(nil)
+            case ("0", [.control]): front.zoomReset(nil)
+            default: return e
+            }
+            return nil
+        }
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
+        watchZoomKeys()
+        TerminalHistory.prune()
+        UNUserNotificationCenter.current().delegate = self
         // Sizes and dates in rf-core's English wording until the interface is translated.
         // sizes and dates speak the interface's language ("bayt", decimal comma)
         setEnglish(on: !AppSettings.speaksTurkish)
@@ -52,7 +85,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if controllers.isEmpty {
             // RF_START (development): a folder to open, or a file to open its folder with it selected
             let env = ProcessInfo.processInfo.environment["RF_START"]
-            if let env, env.hasPrefix("settings") {
+            // RF_START=terminal:<folder> (development): a window on a terminal tab there
+            if let env, env.hasPrefix("terminal:") {
+                openWindow(at: TerminalAddress.url(in: URL(fileURLWithPath: String(env.dropFirst("terminal:".count)))))
+            } else if let env, env.hasPrefix("settings") {
                 let wc = openWindow(at: home)
                 wc.openSettings(nil)
                 let page = env.split(separator: ":").dropFirst().first.map(String.init) ?? ""
@@ -87,6 +123,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        controllers.forEach { $0.saveTerminalHistories() }
         saveSession()
         FerryService.shared.stop()
     }
@@ -142,6 +179,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Folders dropped on the Dock icon or opened with `open -a rustyfiles <folder>`.
     func application(_ application: NSApplication, open urls: [URL]) {
         for url in urls {
+            // Pulse's browser tabs: a web page or an .html file sent here opens as a page in the window in front
+            if WebAddress.isWeb(url) {
+                if let front = frontController {
+                    front.openTab(url, activate: true)
+                    front.window?.makeKeyAndOrderFront(nil)
+                } else {
+                    openWindow(at: url)
+                }
+                continue
+            }
             var isDir: ObjCBool = false
             if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue {
                 // General › Folders opened from other apps open in a new window; off: a tab
@@ -190,5 +237,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func newWindow(_ sender: Any?) {
         let key = NSApp.keyWindow?.windowController as? BrowserWindowController
         openWindow(at: key?.current ?? home)
+    }
+}
+
+// A click on "an agent is waiting" brings its pane to the front; shown even while Pulse is in front (another tab).
+extension AppDelegate: @preconcurrency UNUserNotificationCenterDelegate {
+    func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler done: @escaping () -> Void) {
+        if let pane = response.notification.request.content.userInfo["pane"] as? String { TerminalRegistry.shared.reveal(paneID: pane) }
+        done()
+    }
+
+    func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification, withCompletionHandler done: @escaping (UNNotificationPresentationOptions) -> Void) {
+        done([.banner, .sound])
     }
 }

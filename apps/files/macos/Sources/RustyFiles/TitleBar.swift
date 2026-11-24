@@ -113,6 +113,12 @@ final class TabStripView: HoverView {
         pressedClose = nil
     }
 
+    /// Pulse's right-click menu (PulseMenu): the same menu, opening with motion.
+    override func rightMouseDown(with event: NSEvent) {
+        guard Motion.on, let m = menu(for: event) else { return super.rightMouseDown(with: event) }
+        PulseMenu.show(m, for: event, in: self)
+    }
+
     override func menu(for event: NSEvent) -> NSMenu? {
         guard let i = tab(at: convert(event.locationInWindow, from: nil)) else { return nil }
         return menuFor?(i)
@@ -144,7 +150,7 @@ extension NSBezierPath {
 @MainActor
 final class TitleBarView: FlippedView {
     let strip = TabStripView()
-    let plus = IconButton(icon: "plus", size: NSSize(width: 28, height: 28), iconSize: 14, tooltip: String(localized: "New tab"))
+    let plus = IconButton(icon: "plus", size: NSSize(width: 28, height: 28), iconSize: 14, tooltip: String(localized: "New tab"), shortcut: "⌘T")
     /// The active tab's glass: as wide as the tab and 8 px taller downwards, cut by the strip's
     /// box, so its top corners are round and its bottom is flat (glass.rs `LensShape::Tab`).
     private let tabClip = FlippedView()

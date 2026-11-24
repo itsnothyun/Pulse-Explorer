@@ -76,6 +76,7 @@ final class QuickRowView: NSView {
             let action = b.action
             button.action = { [weak self] _ in
                 self?.enclosingMenuItem?.menu?.cancelTracking()
+                PulseMenu.closeAll()
                 DispatchQueue.main.async { action() }
             }
             button.frame = NSRect(x: 8 + CGFloat(i) * 38, y: 4, width: 36, height: 32)

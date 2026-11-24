@@ -8,22 +8,22 @@ import Quartz
 @MainActor
 final class CommandBarView: FlippedView {
     let new = IconButton(icon: "circle-plus", size: NSSize(width: 0, height: 32), tooltip: String(localized: "New"))
-    let cut = IconButton(icon: "scissors", size: NSSize(width: 36, height: 32), tooltip: String(localized: "Cut"))
-    let copy = IconButton(icon: "copy", size: NSSize(width: 36, height: 32), tooltip: String(localized: "Copy"))
-    let paste = IconButton(icon: "clipboard-paste", size: NSSize(width: 36, height: 32), tooltip: String(localized: "Paste"))
-    let rename = IconButton(icon: "text-cursor-input", size: NSSize(width: 36, height: 32), tooltip: String(localized: "Rename"))
+    let cut = IconButton(icon: "scissors", size: NSSize(width: 36, height: 32), tooltip: String(localized: "Cut"), shortcut: "⌘X")
+    let copy = IconButton(icon: "copy", size: NSSize(width: 36, height: 32), tooltip: String(localized: "Copy"), shortcut: "⌘C")
+    let paste = IconButton(icon: "clipboard-paste", size: NSSize(width: 36, height: 32), tooltip: String(localized: "Paste"), shortcut: "⌘V")
+    let rename = IconButton(icon: "text-cursor-input", size: NSSize(width: 36, height: 32), tooltip: String(localized: "Rename"), shortcut: "F2")
     let share = IconButton(icon: "share-2", size: NSSize(width: 36, height: 32), tooltip: String(localized: "Share"))
-    let delete = IconButton(icon: "trash", size: NSSize(width: 36, height: 32), tooltip: String(localized: "Delete"))
-    let properties = IconButton(icon: "wrench", size: NSSize(width: 36, height: 32), tooltip: String(localized: "Properties"))
-    let filter = IconButton(icon: "list-filter", size: NSSize(width: 36, height: 32), tooltip: String(localized: "Filter"))
+    let delete = IconButton(icon: "trash", size: NSSize(width: 36, height: 32), tooltip: String(localized: "Move to Trash"), shortcut: "⌘⌫")
+    let properties = IconButton(icon: "wrench", size: NSSize(width: 36, height: 32), tooltip: String(localized: "Properties"), shortcut: "⌘I")
+    let filter = IconButton(icon: "list-filter", size: NSSize(width: 36, height: 32), tooltip: String(localized: "Filter"), shortcut: "⌘F")
     let sort = IconButton(icon: "arrow-up-down", size: NSSize(width: 0, height: 32), tooltip: String(localized: "Sort"))
     let view = IconButton(icon: "layout-grid", size: NSSize(width: 0, height: 32), tooltip: String(localized: "View"))
-    let preview = IconButton(icon: "panel-right", size: NSSize(width: 36, height: 32), tooltip: String(localized: "Preview pane"))
+    let preview = IconButton(icon: "panel-right", size: NSSize(width: 36, height: 32), tooltip: String(localized: "Preview pane"), shortcut: "⇧⌘P")
     // optional (Settings › Appearance › Command bar buttons)
-    let newFolder = IconButton(icon: "folder-plus", size: NSSize(width: 36, height: 32), tooltip: String(localized: "New folder"))
+    let newFolder = IconButton(icon: "folder-plus", size: NSSize(width: 36, height: 32), tooltip: String(localized: "New folder"), shortcut: "⇧⌘N")
     let terminal = IconButton(icon: "square-terminal", size: NSSize(width: 36, height: 32), tooltip: String(localized: "Open in Terminal"))
-    let hiddenItems = IconButton(icon: "eye", size: NSSize(width: 36, height: 32), tooltip: String(localized: "Show or hide hidden items"))
-    let refresh = IconButton(icon: "rotate-cw", size: NSSize(width: 36, height: 32), tooltip: String(localized: "Refresh"))
+    let hiddenItems = IconButton(icon: "eye", size: NSSize(width: 36, height: 32), tooltip: String(localized: "Show or hide hidden items"), shortcut: "⇧⌘.")
+    let refresh = IconButton(icon: "rotate-cw", size: NSSize(width: 36, height: 32), tooltip: String(localized: "Refresh"), shortcut: "⌘R")
     private let sepLeft = Divider()
     private let sepRight = Divider()
 
@@ -430,6 +430,19 @@ final class TextCellView: HoverView {
 @MainActor
 final class FileTableView: NSTableView, NSServicesMenuRequestor {
     weak var list: FileListController?
+
+    /// ⌘- / ⌃-scroll and pinch zoom the list's rows (FileListController.zoom).
+    override func scrollWheel(with event: NSEvent) {
+        if !event.modifierFlags.intersection([.command, .control]).isEmpty, let list {
+            list.zoomGesture(event.scrollingDeltaY, notch: event.hasPreciseScrollingDeltas ? 24 : 1)
+            return
+        }
+        super.scrollWheel(with: event)
+    }
+
+    override func magnify(with event: NSEvent) {
+        list?.zoomGesture(event.magnification, notch: 0.18)
+    }
     private(set) var hoveredRow = -1
 
     override func keyDown(with event: NSEvent) {
@@ -489,6 +502,12 @@ final class FileTableView: NSTableView, NSServicesMenuRequestor {
         return super.validateProposedFirstResponder(responder, for: event)
     }
 
+    /// Pulse's right-click menu (PulseMenu): the same menu, opening with motion.
+    override func rightMouseDown(with event: NSEvent) {
+        guard Motion.on, let m = menu(for: event) else { return super.rightMouseDown(with: event) }
+        PulseMenu.show(m, for: event, in: self)
+    }
+
     override func menu(for event: NSEvent) -> NSMenu? {
         let r = row(at: convert(event.locationInWindow, from: nil))
         if r >= 0 && !selectedRowIndexes.contains(r) { selectRowIndexes([r], byExtendingSelection: false) }
@@ -527,6 +546,8 @@ final class StatusBarView: FlippedView {
     var progress = "" { didSet { needsDisplay = true } }
     var progressFraction: Double? { didSet { needsDisplay = true } }
     var performance = "" { didSet { needsDisplay = true } }
+    /// The repository's branch and changes, when the folder is in one (DevTools.swift).
+    var git = "" { didSet { needsDisplay = true } }
 
     override func draw(_ dirtyRect: NSRect) {
         let p = Palette.of(self)
@@ -534,7 +555,7 @@ final class StatusBarView: FlippedView {
         NSRect(x: 0, y: 0, width: bounds.width, height: 1).fill()
         // px_3, gap_3, text_xs
         var r = NSRect(x: 12, y: 1, width: bounds.width - 24, height: bounds.height - 1)
-        let right = [progress, performance].filter { !$0.isEmpty }.joined(separator: "   ")
+        let right = [git, progress, performance].filter { !$0.isEmpty }.joined(separator: "   ")
         if !right.isEmpty {
             let rw = min(Draw.textWidth(right, font: Metrics.textXs), r.width * 0.6)
             var x = r.maxX - rw

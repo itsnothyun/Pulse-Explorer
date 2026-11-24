@@ -163,7 +163,17 @@ impl Render for FlyoutView {
                 }
             })
             .child(
-                div().relative().w_full().child(content).child(
+                div().relative().w_full().child(
+                    // the panel's content fades in as it opens (Pulse motion)
+                    div()
+                        .w_full()
+                        .child(content)
+                        .with_animation(
+                            "flyout-in",
+                            Animation::new(Duration::from_millis(if crate::settings::animations() { 140 } else { 1 })).with_easing(ease_out_quint()),
+                            |el, t| el.opacity(t),
+                        ),
+                ).child(
                     // the window follows the content's height
                     canvas(
                         move |b, window, _| {

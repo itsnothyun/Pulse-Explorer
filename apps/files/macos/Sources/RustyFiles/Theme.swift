@@ -152,7 +152,10 @@ final class LensView: NSGlassEffectView {
         self.cornerRadius = cornerRadius
         style = .clear
         // live lensing under the pointer and on press (macOS 27)
-        if #available(macOS 27.0, *) { effectIsInteractive = true }
+        // (by name, so the app still builds with the macOS 26 SDK, which does not declare it)
+        if #available(macOS 27.0, *), responds(to: NSSelectorFromString("setEffectIsInteractive:")) {
+            setValue(true, forKey: "effectIsInteractive")
+        }
     }
 
     @available(*, unavailable)

@@ -22,8 +22,9 @@ pub fn set(mut rules: Vec<OpenRule>) {
 /// tauri.conf.json `fileAssociations`). Archives are left out: rustyfiles opens them like folders.
 pub const PULSE_EXTS: &[&str] = &[
     "pdf", "docx", "doc", "odt", "rtf", "pptx", "ppt", "odp", "xlsx", "xls", "ods", "csv", "tsv", "epub", "fb2", "png", "jpg",
-    "jpeg", "webp", "gif", "bmp", "ico", "svg", "md", "json", "yaml", "yml", "toml", "xml", "log", "ini", "txt", "mp4", "webm", "mp3",
-    "wav", "flac", "ogg", "aac",
+    "jpeg", "webp", "gif", "bmp", "ico", "svg", "md", "json", "yaml", "yml", "toml", "xml", "log", "ini", "txt",
+    // video and audio: Pulse's player (the Quick View window, PulsePlayer.tsx)
+    "mp4", "m4v", "mov", "webm", "mkv", "avi", "ogv", "mp3", "m4a", "wav", "flac", "ogg", "oga", "opus", "aac",
 ];
 
 /// Pulse Explorer's viewer: `PULSE_VIEWER`, which Pulse Explorer sets when it starts the file manager, else PulseExplorer.exe one

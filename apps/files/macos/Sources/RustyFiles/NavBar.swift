@@ -165,17 +165,19 @@ final class BreadcrumbView: HoverView {
 /// (accent while typing), the breadcrumb, a divider and the two mode buttons.
 @MainActor
 final class OmnibarView: FlippedView, NSTextFieldDelegate {
-    enum Mode { case breadcrumb, path, filter }
+    /// `search`: the folder and everything under it (SearchPlace), started with ⇧⌘F or ⌘↩ in the filter.
+    enum Mode { case breadcrumb, path, filter, search }
 
     let breadcrumb = BreadcrumbView()
     let field = NSTextField()
-    let commandButton = IconButton(icon: "square-chevron-right", size: NSSize(width: 28, height: 28), iconSize: 15, tooltip: String(localized: "Go to a path"))
-    let searchButton = IconButton(icon: "search", size: NSSize(width: 28, height: 28), iconSize: 15, tooltip: String(localized: "Filter this folder"))
+    let commandButton = IconButton(icon: "square-chevron-right", size: NSSize(width: 28, height: 28), iconSize: 15, tooltip: String(localized: "Go to a path"), shortcut: "⌘L")
+    let searchButton = IconButton(icon: "search", size: NSSize(width: 28, height: 28), iconSize: 15, tooltip: String(localized: "Filter this folder"), shortcut: "⌘F")
     private let divider = Divider()
 
     private(set) var mode: Mode = .breadcrumb
     var currentPath = ""
     var onSubmitPath: ((String) -> Void)?
+    var onSearch: ((String) -> Void)?
     var onFilter: ((String) -> Void)?
 
     override init(frame: NSRect) {
@@ -242,13 +244,16 @@ final class OmnibarView: FlippedView, NSTextFieldDelegate {
         mode = m
         breadcrumb.isHidden = true
         field.isHidden = false
-        searchButton.isOn = m == .filter
+        searchButton.isOn = m == .filter || m == .search
         commandButton.isOn = m == .path
         if m == .path {
             field.placeholderString = nil
             field.stringValue = currentPath
+        } else if m == .search {
+            field.placeholderString = String(localized: "Search this folder and its subfolders")
+            field.stringValue = ""
         } else {
-            field.placeholderString = String(localized: "Filter by name")
+            field.placeholderString = String(localized: "Filter by name  ·  ⌘↩ searches subfolders")
             field.stringValue = ""
         }
         window?.makeFirstResponder(field)
@@ -278,6 +283,12 @@ final class OmnibarView: FlippedView, NSTextFieldDelegate {
                 let text = field.stringValue
                 end()
                 onSubmitPath?(text)
+            } else if mode == .search || NSApp.currentEvent?.modifierFlags.contains(.command) == true {
+                // the folder and everything under it
+                let text = field.stringValue
+                guard !text.trimmingCharacters(in: .whitespaces).isEmpty else { return true }
+                end()
+                onSearch?(text)
             } else {
                 // Enter in the filter moves into the list, keeping the filter.
                 window?.makeFirstResponder(nil)
@@ -301,13 +312,13 @@ final class OmnibarView: FlippedView, NSTextFieldDelegate {
 /// window buttons are there.)
 @MainActor
 final class NavBarView: FlippedView {
-    let sidebarToggle = IconButton(icon: "panel-left", size: NSSize(width: 32, height: 32), tooltip: String(localized: "Show or hide the sidebar"))
-    let back = IconButton(icon: "arrow-left", size: NSSize(width: 32, height: 32), tooltip: String(localized: "Back"))
-    let forward = IconButton(icon: "arrow-right", size: NSSize(width: 32, height: 32), tooltip: String(localized: "Forward"))
-    let up = IconButton(icon: "arrow-up", size: NSSize(width: 32, height: 32), tooltip: String(localized: "Up"))
-    let refresh = IconButton(icon: "rotate-cw", size: NSSize(width: 32, height: 32), tooltip: String(localized: "Refresh"))
+    let sidebarToggle = IconButton(icon: "panel-left", size: NSSize(width: 32, height: 32), tooltip: String(localized: "Show or hide the sidebar"), shortcut: "⌃⌘S")
+    let back = IconButton(icon: "arrow-left", size: NSSize(width: 32, height: 32), tooltip: String(localized: "Back"), shortcut: "⌘[")
+    let forward = IconButton(icon: "arrow-right", size: NSSize(width: 32, height: 32), tooltip: String(localized: "Forward"), shortcut: "⌘]")
+    let up = IconButton(icon: "arrow-up", size: NSSize(width: 32, height: 32), tooltip: String(localized: "Up one level"), shortcut: "⌘↑")
+    let refresh = IconButton(icon: "rotate-cw", size: NSSize(width: 32, height: 32), tooltip: String(localized: "Refresh"), shortcut: "⌘R")
     let omnibar = OmnibarView()
-    let statusCenter = IconButton(icon: "list-checks", size: NSSize(width: 32, height: 32), tooltip: String(localized: "Operations"))
+    let statusCenter = IconButton(icon: "list-checks", size: NSSize(width: 32, height: 32), tooltip: String(localized: "Status Center: copies, moves and other operations"))
 
     override init(frame: NSRect) {
         super.init(frame: frame)

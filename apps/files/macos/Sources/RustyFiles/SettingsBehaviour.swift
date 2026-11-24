@@ -196,6 +196,9 @@ enum Sessions {
     /// A tab's address as it is stored: a path, or "rustyfiles:home" / "rustyfiles:settings".
     static func url(_ s: String) -> URL? {
         if s.hasPrefix("rustyfiles:") { return URL(string: s) }
+        // Pulse's browser tabs come back too (an .html file only while it is there)
+        if let u = URL(string: s), u.scheme == "http" || u.scheme == "https" { return u }
+        if WebAddress.isHTMLFile(URL(fileURLWithPath: s)) { return URL(fileURLWithPath: s) }
         var isDir: ObjCBool = false
         guard FileManager.default.fileExists(atPath: s, isDirectory: &isDir), isDir.boolValue else { return nil }
         return URL(fileURLWithPath: s)

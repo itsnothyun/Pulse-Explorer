@@ -4246,13 +4246,18 @@ impl FolderView {
         let mut tag_grid = div().grid().grid_cols(tile_cols(avail, 140., 220., 12.)).gap_3();
         let has_tags = !tags.is_empty() && shown("tags");
         for (id, name, color, count) in tags {
+            // the tag's colour on its icon and as a wash over the card, as on the Mac (HomeView.swift `.tag`)
+            let tint = crate::tags::color(color);
             tag_grid = tag_grid.child(
                 card(("home-tag", id as usize).into())
+                    .bg(tint.alpha(0.11))
+                    .border_color(tint.alpha(0.38))
+                    .hover(move |s| s.bg(tint.alpha(0.18)))
                     .child(
                         h_flex()
                             .gap_2()
                             .items_center()
-                            .child(div().size(px(10.)).flex_shrink_0().rounded_full().bg(crate::tags::color(color)))
+                            .child(Icon::new(L::Tag).size(px(18.)).flex_shrink_0().text_color(tint))
                             .child(div().flex_1().min_w_0().text_sm().overflow_hidden().text_ellipsis().whitespace_nowrap().child(crate::i18n::td(&name))),
                     )
                     .child(div().text_xs().text_color(p.text_secondary).child(crate::i18n::items(count)))

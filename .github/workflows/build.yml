@@ -1,0 +1,54 @@
+# Builds Pulse Explorer where this repo's Mac can't: the Windows desktop app (the file manager, the web app and the Tauri
+# shell, into its NSIS installer), and runs the web tests. The Mac app is built and tested locally (macOS 26 SDK).
+name: build
+
+on:
+  push:
+    branches: [main, "feat/**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  web:
+    name: Web tests and types
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm vitest run
+      - run: npx tsc --noEmit -p apps/web
+
+  windows:
+    name: Windows desktop build
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            apps/files -> target
+            apps/desktop/src-tauri -> target
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # the file manager (GPUI, Windows-only) and the desktop shell with its installer
+      - run: pnpm desktop:build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pulse-explorer-windows-installer
+          path: apps/desktop/src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: error

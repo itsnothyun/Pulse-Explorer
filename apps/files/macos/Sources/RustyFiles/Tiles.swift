@@ -6,13 +6,35 @@ import QuickLookThumbnailing
 /// `GRID_SIZES[2]`): tiles 124 wide in rows 150 high with 4 between them, the picture asked
 /// for at 128 and drawn at 96, the label `text_xs`, centred, at most two lines.
 enum TileMetrics {
-    static let width: CGFloat = 124
-    static let rowHeight: CGFloat = 150
+    /// The picture's size at each zoom level (⌘+ / ⌘−, ⌃+ / ⌃−, ⌘-scroll, pinch); level 2 is the Windows default.
+    static let levels: [CGFloat] = [48, 64, 96, 128, 176, 256]
+    static let defaultLevel = 2
+    static var level: Int {
+        get {
+            let v = UserDefaults.standard.object(forKey: "tileZoom") as? Int ?? defaultLevel
+            return min(max(v, 0), levels.count - 1)
+        }
+        set { UserDefaults.standard.set(min(max(newValue, 0), levels.count - 1), forKey: "tileZoom") }
+    }
+    static var visual: CGFloat { levels[level] }
+    /// 124 × 150 at the default size: the picture, 28 across for the tile's padding, 54 down for two lines of name.
+    static var width: CGFloat { visual + 28 }
+    static var rowHeight: CGFloat { visual + 54 }
     static let gap: CGFloat = 4
-    static let visual: CGFloat = 96
     /// The grid's own padding (`py_2`, `px 6`).
     static let padX: CGFloat = 6
     static let padY: CGFloat = 8
+}
+
+/// The details list's row heights (zoom in details: compact, the Windows default, roomy).
+enum ListZoom {
+    static let levels: [CGFloat] = [24, 30, 38]
+    static let defaultLevel = 1
+    static var level: Int {
+        get { min(max(UserDefaults.standard.object(forKey: "rowZoom") as? Int ?? defaultLevel, 0), levels.count - 1) }
+        set { UserDefaults.standard.set(min(max(newValue, 0), levels.count - 1), forKey: "rowZoom") }
+    }
+    static var rowHeight: CGFloat { levels[level] }
 }
 
 /// Thumbnails from Quick Look, made off the main thread and kept for the session. A file
@@ -24,30 +46,31 @@ final class ThumbnailCache {
     private var failed: Set<String> = []
     private var pending: [String: [(NSImage) -> Void]] = [:]
 
-    func cached(_ path: String) -> NSImage? { images[path] }
+    func cached(_ path: String) -> NSImage? { images["\(Int(TileMetrics.visual))|" + path] }
 
     /// Calls `done` with the thumbnail when there is one (not at all when there is none).
     func request(_ path: String, scale: CGFloat, done: @escaping (NSImage) -> Void) {
-        if let image = images[path] { return done(image) }
+        let side = TileMetrics.visual
+        let key = "\(Int(side))|" + path
+        if let image = images[key] { return done(image) }
         guard !failed.contains(path) else { return }
-        if pending[path] != nil {
-            pending[path]?.append(done)
+        if pending[key] != nil {
+            pending[key]?.append(done)
             return
         }
-        pending[path] = [done]
-        let side = TileMetrics.visual
+        pending[key] = [done]
         let request = QLThumbnailGenerator.Request(
             fileAt: URL(fileURLWithPath: path), size: CGSize(width: side, height: side), scale: scale, representationTypes: .thumbnail)
         QLThumbnailGenerator.shared.generateBestRepresentation(for: request) { rep, _ in
             let cg = rep?.cgImage
             Task { @MainActor in
-                let waiting = ThumbnailCache.shared.pending.removeValue(forKey: path) ?? []
+                let waiting = ThumbnailCache.shared.pending.removeValue(forKey: key) ?? []
                 guard let cg else {
                     ThumbnailCache.shared.failed.insert(path)
                     return
                 }
                 let image = NSImage(cgImage: cg, size: NSSize(width: CGFloat(cg.width) / scale, height: CGFloat(cg.height) / scale))
-                ThumbnailCache.shared.images[path] = image
+                ThumbnailCache.shared.images[key] = image
                 waiting.forEach { $0(image) }
             }
         }
@@ -62,7 +85,7 @@ final class ThumbnailCache {
     /// Forgets a folder's thumbnails (its files changed).
     func forget(under dir: String) {
         let prefix = dir.hasSuffix("/") ? dir : dir + "/"
-        images = images.filter { !$0.key.hasPrefix(prefix) }
+        images = images.filter { !($0.key.split(separator: "|", maxSplits: 1).last.map(String.init) ?? "").hasPrefix(prefix) }
         failed = failed.filter { !$0.hasPrefix(prefix) }
     }
 }
@@ -144,17 +167,71 @@ final class TileCollectionView: NSCollectionView, NSServicesMenuRequestor {
         super.keyDown(with: event)
     }
 
+    override func scrollWheel(with event: NSEvent) {
+        if !event.modifierFlags.intersection([.command, .control]).isEmpty, let list {
+            list.zoomGesture(event.scrollingDeltaY, notch: event.hasPreciseScrollingDeltas ? 24 : 1)
+            return
+        }
+        super.scrollWheel(with: event)
+    }
+
+    override func magnify(with event: NSEvent) {
+        list?.zoomGesture(event.magnification, notch: 0.18)
+    }
+
+    /// Where a Shift-click's range starts: the item clicked last without Shift.
+    private var anchor: IndexPath?
+
+    /// Clicks select as in Finder's icon view: a click picks one item, ⌘ adds or takes away one, Shift picks the range
+    /// from the last clicked item (⇧⌘ adds the range to what is picked). Done here because the collection view's own
+    /// Shift-click did not extend the selection in this grid.
     override func mouseDown(with event: NSEvent) {
+        let at = indexPathForItem(at: convert(event.locationInWindow, from: nil))
+        let mods = event.modifierFlags.intersection([.shift, .command])
+        if let at, event.clickCount == 1, !mods.isEmpty {
+            window?.makeFirstResponder(self)
+            var picked = selectionIndexPaths
+            if mods.contains(.shift), let from = anchor ?? picked.min() {
+                let lo = min(from.item, at.item), hi = max(from.item, at.item)
+                let range = Set((lo...hi).map { IndexPath(item: $0, section: at.section) })
+                picked = mods.contains(.command) ? picked.union(range) : range
+            } else {
+                // ⌘ alone: this one in or out
+                if picked.contains(at) { picked.remove(at) } else { picked.insert(at) }
+                anchor = at
+            }
+            setSelection(picked)
+            return
+        }
         super.mouseDown(with: event)
-        if event.clickCount == 2, indexPathForItem(at: convert(event.locationInWindow, from: nil)) != nil {
+        if let at, mods.isEmpty { anchor = at }
+        if at == nil, mods.isEmpty { anchor = nil }
+        if event.clickCount == 2, at != nil {
             list?.openSelected()
         }
+    }
+
+    /// Picks exactly `picked`, telling the list what came and went (as a click would).
+    private func setSelection(_ picked: Set<IndexPath>) {
+        let old = selectionIndexPaths
+        let gone = old.subtracting(picked)
+        let new = picked.subtracting(old)
+        selectionIndexPaths = picked
+        if !gone.isEmpty { delegate?.collectionView?(self, didDeselectItemsAt: gone) }
+        if !new.isEmpty { delegate?.collectionView?(self, didSelectItemsAt: new) }
+    }
+
+    /// Pulse's right-click menu (PulseMenu): the same menu, opening with motion.
+    override func rightMouseDown(with event: NSEvent) {
+        guard Motion.on, let m = menu(for: event) else { return super.rightMouseDown(with: event) }
+        PulseMenu.show(m, for: event, in: self)
     }
 
     override func menu(for event: NSEvent) -> NSMenu? {
         let at = indexPathForItem(at: convert(event.locationInWindow, from: nil))
         if let at, !selectionIndexPaths.contains(at) {
             selectionIndexPaths = [at]
+            anchor = at
             delegate?.collectionView?(self, didSelectItemsAt: [at])
         }
         if at == nil {

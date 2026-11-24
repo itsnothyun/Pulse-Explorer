@@ -1,4 +1,5 @@
 import AppKit
+import PulseKit
 import Quartz
 
 /// Details (the table) or the grid's Tiles.
@@ -53,6 +54,8 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
     var filter = "" { didSet { if filter != oldValue { rearrange() } } }
 
     var onOpenFolder: ((URL) -> Void)?
+    /// An .html file opened: Pulse's build shows it in a browser tab (WebTabs.swift).
+    var onOpenWeb: ((URL) -> Void)?
     var onOpenDiskImage: ((URL) -> Void)?
     var onBack: (() -> Void)?
     var onChange: (() -> Void)?
@@ -66,7 +69,7 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
         super.init()
         rebuildColumns()
         table.headerView = nil
-        table.rowHeight = Metrics.rowHeight
+        table.rowHeight = ListZoom.rowHeight
         table.intercellSpacing = .zero
         table.style = .plain
         table.backgroundColor = .clear
@@ -134,7 +137,12 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
         message.isHidden = true
         if card.subviews.contains(privacyButton) { privacyButton.isHidden = true }
 
-        [commandBar, header, scroll, tileScroll, status, message, previewPane, previewHandle].forEach(card.addSubview)
+        [commandBar, header, scroll, tileScroll, status, message, previewPane, previewHandle, noteBanner].forEach(card.addSubview)
+        noteBanner.isHidden = true
+        noteBanner.onEdit = { [weak self] in
+            guard let self, let dir = self.url else { return }
+            NoteEditor.edit(dir, in: self.card.window) { self.refreshNote() }
+        }
         previewHandle.currentWidth = { [weak self] in self?.previewWidth ?? PreviewPane.defaultWidth }
         previewHandle.onDrag = { [weak self] w in
             self?.previewWidth = w
@@ -170,7 +178,14 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
         }
     }
 
-    @objc func togglePreviewPane(_ sender: Any?) { previewShown.toggle() }
+    @objc func togglePreviewPane(_ sender: Any?) {
+        let showing = !previewShown
+        Motion.animate(0.24) { [self] in
+            previewShown.toggle()
+            card.layoutSubtreeIfNeeded()
+        }
+        if showing { Motion.fadeIn(previewPane) }
+    }
 
     func showProperties() {
         guard archive == nil else { return }
@@ -208,16 +223,19 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
             previewHandle.frame = NSRect(x: b.width - pw - 3, y: barH, width: 6, height: b.height - barH)
         }
         commandBar.frame = NSRect(x: 0, y: 0, width: b.width, height: Metrics.commandBarHeight)
+        // the folder's note, between the command bar and the list (PulseFeatures.swift)
+        let noteH: CGFloat = noteBanner.isHidden ? 0 : NoteBanner.height
+        noteBanner.frame = NSRect(x: 0, y: barH, width: b.width - (previewShown && !AppSettings.previewAtBottom && !previewPane.isHidden ? (previewPane.frame.width) : 0), height: NoteBanner.height)
         if paneShown && !bottom { b.size.width -= pw }
         if paneShown && bottom {
             previewPane.frame = NSRect(x: 0, y: b.height - ph, width: b.width, height: ph)
             b.size.height -= ph
         }
-        header.frame = NSRect(x: 0, y: barH, width: b.width, height: Metrics.headerHeight)
-        let top = barH + Metrics.headerHeight
+        header.frame = NSRect(x: 0, y: barH + noteH, width: b.width, height: Metrics.headerHeight)
+        let top = barH + noteH + Metrics.headerHeight
         status.frame = NSRect(x: 0, y: b.height - statusH, width: b.width, height: Metrics.statusBarHeight)
         scroll.frame = NSRect(x: 0, y: top, width: b.width, height: b.height - statusH - top)
-        tileScroll.frame = NSRect(x: 0, y: barH, width: b.width, height: b.height - statusH - barH)
+        tileScroll.frame = NSRect(x: 0, y: barH + noteH, width: b.width, height: b.height - statusH - barH - noteH)
         // as many columns as fit, left-aligned with 4 between them (not spread out)
         let cols = max(Int((b.width - 2 * TileMetrics.padX + TileMetrics.gap) / (TileMetrics.width + TileMetrics.gap)), 1)
         let used = CGFloat(cols) * (TileMetrics.width + TileMetrics.gap) - TileMetrics.gap
@@ -335,6 +353,63 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
 
     func applyViewModeQuietly() { applyViewMode() }
 
+    // MARK: Pulse's tools (PulseFeatures.swift)
+
+    let noteBanner = NoteBanner()
+
+    /// Shows (or hides) the folder's note.
+    func refreshNote() {
+        let note = url.flatMap { $0.isFileURL && archive == nil ? FolderNotes.read($0) : nil }
+        guard note != noteBanner.text || noteBanner.isHidden != (note == nil) else { return }
+        noteBanner.text = note
+        Motion.animate(0.2) { [self] in
+            card.needsLayout = true
+            card.layoutSubtreeIfNeeded()
+        }
+    }
+
+    /// Lists the folder again with `names` selected (after something made them).
+    func reloadAndSelect(_ names: [String]) { reloadSelecting(names) }
+
+    // MARK: zoom (⌘+ / ⌘− / ⌘0, ⌃+ / ⌃−, ⌘- or ⌃-scroll, pinch)
+
+    /// Bigger or smaller: tiles step through their sizes, the list through its row heights. 0 goes back to the default.
+    func zoom(_ step: Int) {
+        let keep = selectedRows
+        switch viewMode {
+        case .tiles:
+            let next = step == 0 ? TileMetrics.defaultLevel : TileMetrics.level + step
+            guard next >= 0, next < TileMetrics.levels.count, next != TileMetrics.level else { return NSSound.beep() }
+            TileMetrics.level = next
+            tileLayout.itemSize = NSSize(width: TileMetrics.width, height: TileMetrics.rowHeight - TileMetrics.gap)
+            Motion.animate(0.22) { [self] in
+                tileLayout.invalidateLayout()
+                card.needsLayout = true
+                card.layoutSubtreeIfNeeded()
+            }
+            tiles.reloadData()
+        case .details:
+            let next = step == 0 ? ListZoom.defaultLevel : ListZoom.level + step
+            guard next >= 0, next < ListZoom.levels.count, next != ListZoom.level else { return NSSound.beep() }
+            ListZoom.level = next
+            table.rowHeight = ListZoom.rowHeight
+            table.noteHeightOfRows(withIndexesChanged: IndexSet(integersIn: 0..<table.numberOfRows))
+            table.reloadData()
+        }
+        selectRows(keep, scrollToFirst: true)
+        selectionChanged()
+    }
+
+    /// ⌘- / ⌃-scroll and pinch go a step per notch of movement, not per event.
+    private var zoomAccum: CGFloat = 0
+    func zoomGesture(_ delta: CGFloat, notch: CGFloat) {
+        zoomAccum += delta
+        if abs(zoomAccum) >= notch {
+            zoom(zoomAccum > 0 ? 1 : -1)
+            zoomAccum = 0
+        }
+    }
+
     private func applyViewMode() {
         let isTiles = viewMode == .tiles
         header.isHidden = isTiles
@@ -405,7 +480,7 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
         v.frame = card.bounds
         v.isHidden = false
         if let page { v.show(page) }
-        [commandBar, header, scroll, tileScroll, status, message].forEach { $0.isHidden = true }
+        [commandBar, header, scroll, tileScroll, status, message, noteBanner].forEach { $0.isHidden = true }
         selectionChanged()
     }
 
@@ -423,7 +498,7 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
         }
         v.frame = card.bounds
         v.isHidden = false
-        [commandBar, header, scroll, tileScroll, status, message].forEach { $0.isHidden = true }
+        [commandBar, header, scroll, tileScroll, status, message, noteBanner].forEach { $0.isHidden = true }
         selectionChanged()
     }
 
@@ -471,7 +546,7 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
         case "listBackground", "listImage", "listImageVisibility":
             card.applyBackground()
         case "fontFamily":
-            table.rowHeight = Metrics.rowHeight
+            table.rowHeight = ListZoom.rowHeight
             reloadItems()
             card.needsLayout = true
         case "dateStyle", "decimalSizes":
@@ -493,6 +568,7 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
         arrange(folder)
         hideSettings()
         loadColumnData(url)
+        refreshNote()
         message.isHidden = true
         if card.subviews.contains(privacyButton) { privacyButton.isHidden = true }
         header.sortKey = sortKey
@@ -637,7 +713,7 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
         let here = writable && !isGathered
         commandBar.cut.isEnabled = any && writable
         commandBar.copy.isEnabled = any
-        commandBar.rename.isEnabled = selectedRows.count == 1 && writable
+        commandBar.rename.isEnabled = !selectedRows.isEmpty && writable
         commandBar.share.isEnabled = any && writable
         commandBar.delete.isEnabled = any && writable
         commandBar.paste.isEnabled = here && Clipboard.hasFiles
@@ -855,6 +931,11 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
     }
 
     func beginRename() {
+        // several items: all of them at once, previewed first (BatchRename.swift)
+        if selectedRows.count > 1, archive == nil, let window = table.window {
+            BatchRename.show(selectedURLs, in: window) { [weak self] made in self?.reloadSelecting(made.map(\.lastPathComponent)) }
+            return
+        }
         guard let folder, selectedRows.count == 1, let row = selectedRows.first,
             let item = folder.item(row: UInt32(row))
         else { return }
@@ -991,6 +1072,11 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
             return
         }
         for u in files {
+            // Pulse's browser tabs: an .html file opens as a page, unless a list of the user's says otherwise
+            if WebAddress.isHTMLFile(u), OpenRules.rule(for: u) == nil, let onOpenWeb {
+                onOpenWeb(u)
+                continue
+            }
             // Settings › File types: the user's own app for this kind of file
             if let app = OpenRules.opener(for: u) {
                 NSWorkspace.shared.open([u], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration())
@@ -1063,7 +1149,7 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
         if known.count == 1, let o = TrashBin.origin(of: known[0]) {
             back.title = String(localized: "Put Back to “\(o.deletingLastPathComponent().lastPathComponent)”")
         }
-        if known.isEmpty { back.toolTip = String(localized: "Moved to the Trash outside rustyfiles: Finder can put it back.") }
+        if known.isEmpty { back.toolTip = String(localized: "Moved to the Trash outside Pulse Explorer: Finder can put it back.") }
         b.add(String(localized: "Delete Immediately…"), "eraser") { [weak self] in self?.deleteImmediately(urls) }
         b.separator()
         b.add(String(localized: "Quick Look"), "eye", key: " ", mods: []) { [weak self] in self?.toggleQuickLook() }
@@ -1109,7 +1195,7 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
             ("scissors", String(localized: "Cut (⌘X)"), true, { [weak self] in self?.cutItems() }),
             ("copy", String(localized: "Copy (⌘C)"), true, { [weak self] in self?.copyItems() }),
             ("clipboard-paste", String(localized: "Paste (⌘V)"), Clipboard.hasFiles, { [weak self] in self?.pasteItems(into: singleDir ? urls.first : nil) }),
-            ("text-cursor-input", String(localized: "Rename (F2)"), items.count == 1, { [weak self] in self?.beginRename() }),
+            ("text-cursor-input", items.count == 1 ? String(localized: "Rename (F2)") : String(localized: "Rename \(items.count) items (F2)"), !items.isEmpty, { [weak self] in self?.beginRename() }),
             ("share-2", String(localized: "Share"), true, { [weak self] in self?.shareSelected() }),
             ("trash", String(localized: "Move to Trash (⌘⌫)"), true, { [weak self] in self?.trashSelected() }),
             ("wrench", String(localized: "Properties (⌘I)"), true, { PropertiesWindow.show(urls) }),
@@ -1125,6 +1211,10 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
         b.separator()
 
         b.add(String(localized: "Copy item path"), "clipboard-copy", key: "c", mods: [.command, .option]) { MenuActions.copyPaths(urls) }
+        // Pulse's developer tools (DevTools.swift): the path in other forms, the file in its repository
+        PathForms.menu(urls, into: b)
+        PathForms.gitMenu(urls, into: b)
+        if archive == nil { PulseFeatureMenus.forItems(urls, list: self, into: b) }
         b.add(String(localized: "Make alias"), "link") { [weak self] in
             self?.run { try urls.map { try FileOps.makeAlias($0) } } done: { made in
                 FileUndo.shared.record(.trash(made), title: String(localized: "Make Alias"))
@@ -1306,6 +1396,11 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
                 MenuActions.setPinned(dir, !pinned)
             }
             b.add(String(localized: "Copy path"), "clipboard-copy") { MenuActions.copyPaths([dir]) }
+            PathForms.gitMenu([dir], into: b)
+            if archive == nil {
+                b.separator()
+                PulseFeatureMenus.forFolder(dir, list: self, into: b)
+            }
         }
         b.add(String(localized: "Show hidden items"), "eye", key: ".", mods: [.command, .shift], checked: showHidden) { AppSettings.showHidden.toggle() }
         if let dir = url, dir.isFileURL {
@@ -1765,14 +1860,30 @@ extension FileListController {
     }
 
     func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
-        Metrics.rowHeight + (groupTitles[row] == nil ? 0 : GroupMetrics.header)
+        ListZoom.rowHeight + (groupTitles[row] == nil ? 0 : GroupMetrics.header)
     }
 
     /// Tags and Git states for the folder, read off the main thread when their columns are on.
     func loadColumnData(_ dir: URL) {
         tagsByName = [:]
         gitByName = [:]
+        status.git = ""
         guard archive == nil else { return }
+        // the repository the folder is in: its branch and what changed, in the status bar (real folders only: not a tag's
+        // or a search's results, not a web page)
+        if dir.isFileURL { DispatchQueue.global(qos: .utility).async {
+            guard Repo.root(of: dir) != nil, let s = Repo.summary(dir) else { return }
+            var text = "⎇ \(s.branch)"
+            if s.ahead > 0 { text += "  ↑\(s.ahead)" }
+            if s.behind > 0 { text += "  ↓\(s.behind)" }
+            text += s.changed == 0 ? "  ·  " + String(localized: "clean") : "  ·  " + String(localized: "\(s.changed) changed")
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { [weak self] in
+                    guard let self, self.url?.standardizedFileURL == dir.standardizedFileURL else { return }
+                    self.status.git = text
+                }
+            }
+        } }
         let wantTags = AppSettings.showsColumn(.tags), wantGit = AppSettings.showsColumn(.git)
         guard wantTags || wantGit else { return }
         DispatchQueue.global(qos: .utility).async {
@@ -1883,7 +1994,10 @@ final class ProgressCard {
         bar.doubleValue = card.total > 0 ? Double(card.done) / Double(card.total) * 100 : 0
         let f = window.frame
         p.setFrameOrigin(NSPoint(x: f.maxX - p.frame.width - 20, y: f.minY + 20))
-        if !p.isVisible { p.orderFront(nil) }
+        if !p.isVisible {
+            p.orderFront(nil)
+            Motion.present(p)
+        }
         if p.parent == nil { window.addChildWindow(p, ordered: .above) }
     }
 

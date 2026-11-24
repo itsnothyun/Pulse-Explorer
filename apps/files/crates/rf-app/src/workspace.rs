@@ -179,6 +179,15 @@ pub struct Workspace {
     /// changes with every turn (the motions are keyed by it, and a way back in that was overtaken by a new opening ends nothing).
     rail_peek_open: bool,
     rail_peek_closing: bool,
+    /// The sidebar sliding in or out when it is shown or hidden (View › Sidebar): whether it showed on the last frame, the
+    /// toggle's serial (the animation's id), and until when it moves. Closing, it is still drawn until then.
+    sidebar_was_shown: bool,
+    sidebar_anim_serial: u64,
+    sidebar_anim_until: Option<std::time::Instant>,
+    /// The preview pane (at the right) sliding open: whether it showed on the last frame, the serial, until when.
+    preview_was_shown: bool,
+    preview_anim_serial: u64,
+    preview_anim_until: Option<std::time::Instant>,
     rail_peek_serial: u64,
     preview_w: f32,
     /// The preview pane at the bottom: its height, the measured row and the debounced write (idle while the pane is at the right).
@@ -823,6 +832,12 @@ impl Workspace {
             rail_peek_bg: None,
             rail_peek_open: false,
             rail_peek_closing: false,
+            sidebar_was_shown: prefs.sidebar_open,
+            sidebar_anim_serial: 0,
+            sidebar_anim_until: None,
+            preview_was_shown: true,
+            preview_anim_serial: 0,
+            preview_anim_until: None,
             rail_peek_serial: 0,
             preview_w: prefs.preview_width.clamp(PREVIEW_MIN, PREVIEW_MAX),
             preview_dock: preview_dock::Dock::new(prefs.preview_height),
@@ -3703,6 +3718,8 @@ const RAIL_W: f32 = 56.;
 const RAIL_OUT_MS: u64 = 240;
 const RAIL_BOUNCE: f32 = 0.18;
 const RAIL_IN_MS: u64 = 130;
+/// The sidebar sliding in or out when it is shown or hidden.
+const SIDEBAR_SLIDE_MS: u64 = 220;
 
 /// The width of the sidebar that is coming out of the rail, for how far out it is (0: the rail's own width, 1: the full width;
 /// past 1 while the spring swings, by a few px). Never narrower than the rail.
@@ -4168,10 +4185,33 @@ impl Render for Workspace {
         // out. The settings lens belongs to the focused pane when that shows Settings: a split tab with Settings in both panes would
         // otherwise have two probes setting one slot to two places on every frame. The rail's peek is opaque, so its rows keep the
         // Fluent selection.
-        self.sidebar_lens = glass_on && !self.sidebar_rail;
+        // shown or hidden since the last frame: it slides (and is still drawn while it slides away)
+        if show_sidebar != self.sidebar_was_shown {
+            self.sidebar_was_shown = show_sidebar;
+            self.sidebar_anim_serial += 1;
+            self.sidebar_anim_until = None;
+            if crate::settings::animations() {
+                self.sidebar_anim_until = Some(std::time::Instant::now() + std::time::Duration::from_millis(SIDEBAR_SLIDE_MS));
+                let serial = self.sidebar_anim_serial;
+                cx.spawn(async move |this, cx| {
+                    cx.background_executor().timer(std::time::Duration::from_millis(SIDEBAR_SLIDE_MS + 16)).await;
+                    let _ = this.update(cx, |ws, cx| {
+                        if ws.sidebar_anim_serial == serial {
+                            ws.sidebar_anim_until = None;
+                            cx.notify();
+                        }
+                    });
+                })
+                .detach();
+            }
+        }
+        let sidebar_sliding = self.sidebar_anim_until.is_some_and(|t| std::time::Instant::now() < t);
+        // (a sidebar on its way out claims no lens)
+        self.sidebar_lens = glass_on && !self.sidebar_rail && show_sidebar;
         self.sidebar_lens_claimed.set(false);
         self.ensure_side_tree(window, cx);
-        let sidebar = show_sidebar.then(|| self.render_sidebar(&p, cx));
+        let sidebar = (show_sidebar || sidebar_sliding).then(|| self.render_sidebar(&p, cx));
+        let sidebar_slide = sidebar_sliding.then_some((show_sidebar, self.sidebar_anim_serial, side_w));
         self.sidebar_lens = false;
         let plan = crate::glass::lens_plan(
             glass_on,
@@ -4461,20 +4501,52 @@ impl Render for Workspace {
                         }),
                 )
         });
-        let preview = if pane_shown && !preview_bottom {
+        // the pane opening slides out from the right edge and fades in (closing, the list takes the room back at once)
+        let right_pane = pane_shown && !preview_bottom;
+        if right_pane != self.preview_was_shown {
+            self.preview_was_shown = right_pane;
+            self.preview_anim_serial += 1;
+            self.preview_anim_until = None;
+            if right_pane && crate::settings::animations() {
+                self.preview_anim_until = Some(std::time::Instant::now() + std::time::Duration::from_millis(SIDEBAR_SLIDE_MS));
+                let serial = self.preview_anim_serial;
+                cx.spawn(async move |this, cx| {
+                    cx.background_executor().timer(std::time::Duration::from_millis(SIDEBAR_SLIDE_MS + 16)).await;
+                    let _ = this.update(cx, |ws, cx| {
+                        if ws.preview_anim_serial == serial {
+                            ws.preview_anim_until = None;
+                            cx.notify();
+                        }
+                    });
+                })
+                .detach();
+            }
+        }
+        let preview_sliding = self.preview_anim_until.is_some_and(|t| std::time::Instant::now() < t);
+        let preview = if right_pane {
             let target = self.active_tab().read(cx).preview_target();
             self.preview.update(cx, |pv, cx| pv.set_target(target, cx));
-            Some(
-                div()
-                    .w(px(self.preview_w))
-                    .flex_shrink_0()
-                    .h_full()
-                    .relative()
-                    .border_l_1()
-                    .border_color(p.divider)
-                    .child(self.preview.clone())
-                    .child(resize_handle("preview-resize", ResizePreview, true)),
-            )
+            let (w, serial) = (self.preview_w, self.preview_anim_serial);
+            let pane = div()
+                .w(px(w))
+                .flex_shrink_0()
+                .h_full()
+                .relative()
+                .border_l_1()
+                .border_color(p.divider)
+                .child(self.preview.clone())
+                .child(resize_handle("preview-resize", ResizePreview, true));
+            Some(if preview_sliding {
+                pane.overflow_hidden()
+                    .with_animation(
+                        ("preview-slide", serial as usize),
+                        Animation::new(std::time::Duration::from_millis(SIDEBAR_SLIDE_MS)).with_easing(ease_out_quint()),
+                        move |el, t| el.w(px(w * t)).opacity(t),
+                    )
+                    .into_any_element()
+            } else {
+                pane.into_any_element()
+            })
         } else {
             None
         };
@@ -4659,13 +4731,30 @@ impl Render for Workspace {
                         this.set_pane_width(true, w, cx);
                     }))
                     .children(sidebar.map(|s| {
+                        // sliding: the slot's width moves (the sidebar inside keeps its own, nothing in it is laid out anew) and it fades
+                        let s = match sidebar_slide {
+                            Some((opening, serial, w)) => div()
+                                .h_full()
+                                .overflow_hidden()
+                                .child(div().h_full().w(px(w)).child(s))
+                                .with_animation(
+                                    ("sidebar-slide", serial as usize),
+                                    Animation::new(std::time::Duration::from_millis(SIDEBAR_SLIDE_MS)).with_easing(ease_out_quint()),
+                                    move |el, t| {
+                                        let k = if opening { t } else { 1. - t };
+                                        el.w(px(w * k)).opacity(k)
+                                    },
+                                )
+                                .into_any_element(),
+                            None => s.into_any_element(),
+                        };
                         div()
                             .id("sidebar-slot")
                             .h_full()
                             .relative()
                             .flex_shrink_0()
                             .child(s)
-                            .child(resize_handle("sidebar-resize", ResizeSidebar, false))
+                            .when(sidebar_slide.is_none(), |d| d.child(resize_handle("sidebar-resize", ResizeSidebar, false)))
                             // on the rail, hovering opens the full sidebar over the content
                             .on_hover(cx.listener(|this, h: &bool, window, cx| {
                                 if this.sidebar_rail && this.rail_peek[0] != *h {

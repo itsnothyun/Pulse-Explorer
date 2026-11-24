@@ -45,16 +45,16 @@ enum MainMenu {
     private typealias W = BrowserWindowController
 
     private static func appMenu() -> NSMenu {
-        let m = NSMenu(title: "rustyfiles")
-        m.addItem(item(String(localized: "About rustyfiles"), #selector(NSApplication.orderFrontStandardAboutPanel(_:))))
+        let m = NSMenu(title: "Pulse Explorer")
+        m.addItem(item(String(localized: "About Pulse Explorer"), #selector(NSApplication.orderFrontStandardAboutPanel(_:))))
         m.addItem(.separator())
         m.addItem(item(String(localized: "Settings…"), #selector(W.openSettings(_:)), ","))
         m.addItem(.separator())
-        m.addItem(item(String(localized: "Hide rustyfiles"), #selector(NSApplication.hide(_:)), "h"))
+        m.addItem(item(String(localized: "Hide Pulse Explorer"), #selector(NSApplication.hide(_:)), "h"))
         m.addItem(item(String(localized: "Hide Others"), #selector(NSApplication.hideOtherApplications(_:)), "h", [.command, .option]))
         m.addItem(item(String(localized: "Show All"), #selector(NSApplication.unhideAllApplications(_:))))
         m.addItem(.separator())
-        m.addItem(item(String(localized: "Quit rustyfiles"), #selector(NSApplication.terminate(_:)), "q"))
+        m.addItem(item(String(localized: "Quit Pulse Explorer"), #selector(NSApplication.terminate(_:)), "q"))
         return m
     }
 
@@ -62,6 +62,11 @@ enum MainMenu {
         let m = NSMenu(title: String(localized: "File"))
         m.addItem(item(String(localized: "New Window"), #selector(AppDelegate.newWindow(_:)), "n"))
         m.addItem(item(String(localized: "New Tab"), #selector(W.newTab(_:)), "t"))
+        m.addItem(item(String(localized: "New Browser Tab"), #selector(W.newBrowserTab(_:)), "t", [.command, .option]))
+        m.addItem(item(String(localized: "New Terminal Tab"), #selector(W.newTerminalTab(_:)), "`", .control))
+        m.addItem(item(String(localized: "Split Terminal Right"), #selector(W.splitTerminalRight(_:)), "d"))
+        // ⇧⌘D splits down only in a terminal tab (AppDelegate's key watch); elsewhere it stays Go › Desktop
+        m.addItem(item(String(localized: "Split Terminal Down (⇧⌘D)"), #selector(W.splitTerminalDown(_:))))
         m.addItem(item(String(localized: "New Folder"), #selector(W.newFolder(_:)), "n", [.command, .shift]))
         m.addItem(.separator())
         m.addItem(item(String(localized: "Open"), #selector(W.openSelection(_:)), key(NSDownArrowFunctionKey)))
@@ -72,6 +77,11 @@ enum MainMenu {
         m.addItem(item(String(localized: "Close Tab"), #selector(W.closeTab(_:)), "w"))
         m.addItem(item(String(localized: "Reopen Closed Tab"), #selector(W.reopenClosedTab(_:)), "t", [.command, .shift]))
         m.addItem(item(String(localized: "Close Window"), #selector(NSWindow.performClose(_:)), "w", [.command, .shift]))
+        m.addItem(.separator())
+        m.addItem(item(String(localized: "Save Tabs as Workspace…"), #selector(W.saveWorkspace(_:)), "s", [.command, .option]))
+        let open = NSMenuItem(title: String(localized: "Open Workspace"), action: nil, keyEquivalent: "")
+        open.submenu = WorkspaceActions.menu()
+        m.addItem(open)
         return m
     }
 
@@ -89,7 +99,9 @@ enum MainMenu {
         m.addItem(item(String(localized: "Move to Trash"), #selector(W.moveToTrash(_:)), key(NSBackspaceCharacter), .command))
         m.addItem(.separator())
         m.addItem(item(String(localized: "Filter"), #selector(W.focusSearch(_:)), "f"))
+        m.addItem(item(String(localized: "Search Subfolders"), #selector(W.focusDeepSearch(_:)), "f", [.command, .shift]))
         m.addItem(item(String(localized: "Go to Path"), #selector(W.focusAddress(_:)), "l"))
+        m.addItem(item(String(localized: "Command Palette…"), #selector(W.showCommandPalette(_:)), "k"))
         return m
     }
 
@@ -97,6 +109,10 @@ enum MainMenu {
         let m = NSMenu(title: String(localized: "View"))
         m.addItem(item(String(localized: "Details"), #selector(W.showDetails(_:)), "1"))
         m.addItem(item(String(localized: "Tiles"), #selector(W.showTiles(_:)), "2"))
+        m.addItem(.separator())
+        m.addItem(item(String(localized: "Zoom In"), #selector(W.zoomIn(_:)), "+"))
+        m.addItem(item(String(localized: "Zoom Out"), #selector(W.zoomOut(_:)), "-"))
+        m.addItem(item(String(localized: "Actual Size"), #selector(W.zoomReset(_:)), "0"))
         m.addItem(.separator())
         m.addItem(item(String(localized: "Show Hidden Files"), #selector(W.toggleHidden(_:)), ".", [.command, .shift]))
         m.addItem(item(String(localized: "Refresh"), #selector(W.refresh(_:)), "r"))
@@ -118,6 +134,9 @@ enum MainMenu {
         m.addItem(item(String(localized: "Documents"), #selector(W.goDocuments(_:)), "o", [.command, .shift]))
         m.addItem(item(String(localized: "Downloads"), #selector(W.goDownloads(_:)), "l", [.command, .option]))
         m.addItem(item(String(localized: "Applications"), #selector(W.goApplications(_:)), "a", [.command, .shift]))
+        m.addItem(.separator())
+        m.addItem(item(String(localized: "Changed Today"), #selector(W.changedToday(_:)), "y", [.command, .shift]))
+        m.addItem(item(String(localized: "What’s Taking Space…"), #selector(W.findSpace(_:)), "u", [.command, .shift]))
         return m
     }
 
@@ -125,6 +144,9 @@ enum MainMenu {
         let m = NSMenu(title: String(localized: "Window"))
         m.addItem(item(String(localized: "Minimize"), #selector(NSWindow.performMiniaturize(_:)), "m"))
         m.addItem(item(String(localized: "Zoom"), #selector(NSWindow.performZoom(_:))))
+        m.addItem(.separator())
+        m.addItem(item(String(localized: "Shelf"), #selector(W.toggleShelf(_:)), "j", [.command, .shift]))
+        m.addItem(item(String(localized: "Agents"), #selector(W.showAgents(_:)), "a", [.command, .option]))
         m.addItem(.separator())
         m.addItem(item(String(localized: "Next Tab"), #selector(W.selectNextTab(_:)), "\t", .control))
         m.addItem(item(String(localized: "Previous Tab"), #selector(W.selectPreviousTab(_:)), "\t", [.control, .shift]))

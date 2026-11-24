@@ -101,7 +101,7 @@ extension SettingsContent {
         var rows: [SettingsRow] = []
         let detail: String
         switch t.state {
-        case .idle: detail = String(localized: "Lists folders of 1,000, 10,000 and 100,000 files the way rustyfiles does and the way most Mac apps do (Foundation, with each item’s size, dates and kind), three times each. Takes about a minute.")
+        case .idle: detail = String(localized: "Lists folders of 1,000, 10,000 and 100,000 files the way Pulse Explorer does and the way most Mac apps do (Foundation, with each item’s size, dates and kind), three times each. Takes about a minute.")
         case .running(let s): detail = s
         case .done: detail = String(localized: "The middle of three runs. Lower is better.")
         case .failed(let e): detail = e
@@ -116,7 +116,7 @@ extension SettingsContent {
                 entries: results.map { r in
                     let x = r.theirs / max(r.ours, 0.01)
                     let faster = x >= 1 ? String(localized: "\(String(format: x >= 10 ? "%.0f" : "%.1f", x))× faster") : String(localized: "slower")
-                    return (r.title, "rustyfiles \(ms(r.ours)) · Foundation \(ms(r.theirs)) · \(faster)", nil)
+                    return (r.title, "Pulse Explorer \(ms(r.ours)) · Foundation \(ms(r.theirs)) · \(faster)", nil)
                 },
                 empty: "", rowActions: [], buttons: []))
         }

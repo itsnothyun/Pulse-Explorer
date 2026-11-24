@@ -1390,6 +1390,8 @@ impl Render for QuickSearch {
                     .inset_0(),
                 ),
             )
+            // fades in as it opens (Pulse motion)
+            .with_animation("quick-search-in", Animation::new(std::time::Duration::from_millis(if crate::settings::animations() { 160 } else { 1 })).with_easing(ease_out_quint()), |el, t| el.opacity(t))
     }
 }
 

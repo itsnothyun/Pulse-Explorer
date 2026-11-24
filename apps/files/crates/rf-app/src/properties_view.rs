@@ -2049,6 +2049,8 @@ impl Render for PropsView {
                             .on_click(cx.listener(|v, _, window, cx| v.apply(false, window, cx))),
                     ),
             )
+            // fades in as it opens (Pulse motion)
+            .with_animation("props-in", Animation::new(std::time::Duration::from_millis(if crate::settings::animations() { 180 } else { 1 })).with_easing(ease_out_quint()), |el, t| el.opacity(t))
     }
 }
 

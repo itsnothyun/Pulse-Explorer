@@ -444,6 +444,8 @@ impl Render for SelectView {
                     .child(Input::new(input).prefix(Icon::new(L::Search).size(px(14.)).text_color(p.text_secondary)))
             }))
             .child(list)
+            // fades in as it drops down (Pulse motion)
+            .with_animation("select-in", Animation::new(std::time::Duration::from_millis(if crate::settings::animations() { 140 } else { 1 })).with_easing(ease_out_quint()), |el, t| el.opacity(t))
     }
 }
 
