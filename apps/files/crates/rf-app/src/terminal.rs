@@ -37,9 +37,37 @@ const PAGE: [(&str, &str); 4] = [
     ("addon-fit.js", include_str!("../assets/terminal/addon-fit.js")),
 ];
 
-/// The address of a terminal tab in `dir`.
+/// The address of a new terminal tab in `dir`; `s` is the tab's own key (its kept history, see [`history_file`]).
 pub fn url_for(dir: &Path) -> String {
-    format!("https://{HOST}/index.html?dir={}", encode(&dir.to_string_lossy()))
+    let key = format!("{:x}{:04x}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_micros()), rand_bits());
+    format!("https://{HOST}/index.html?dir={}&s={key}", encode(&dir.to_string_lossy()))
+}
+
+fn rand_bits() -> u16 {
+    use std::hash::{BuildHasher, Hasher};
+    let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+    h.write_u32(std::process::id());
+    h.finish() as u16
+}
+
+/// Where a tab's output is kept between runs of the app (the last 256 KB), by its key; None for a key that is not ours.
+fn history_file(key: &str) -> Option<PathBuf> {
+    if key.is_empty() || key.len() > 40 || !key.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some(crate::settings::app_dir()?.join("TerminalHistory").join(format!("{key}.bin")))
+}
+
+/// History of tabs nobody opened for a week goes (a closed tab's stays until then: the app cannot tell closing a tab from
+/// quitting).
+fn prune_history() {
+    let Some(dir) = crate::settings::app_dir().map(|d| d.join("TerminalHistory")) else { return };
+    let week = std::time::Duration::from_secs(7 * 86_400);
+    for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        if e.metadata().and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|age| age > week) {
+            let _ = std::fs::remove_file(e.path());
+        }
+    }
 }
 
 pub fn is_terminal(url: &str) -> bool {
@@ -86,6 +114,7 @@ fn decode(s: &str) -> String {
 pub fn page_dir() -> Option<PathBuf> {
     static DIR: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
     DIR.get_or_init(|| {
+        std::thread::spawn(prune_history);
         let dir = crate::settings::app_dir().unwrap_or_else(std::env::temp_dir).join("TerminalPage");
         std::fs::create_dir_all(&dir).ok()?;
         for (name, text) in PAGE {
@@ -117,6 +146,9 @@ struct Shared {
     own_title: Option<String>,
     /// The welcome card has come through (its pulse line is drawn in then).
     card_seen: bool,
+    /// The tail of the output, kept on disk for the next run (`dirty`: not written yet).
+    ring: Option<rf_pulse::agents::Ring>,
+    dirty: bool,
 }
 
 struct Session {
@@ -162,12 +194,22 @@ pub fn on_message(id: EntityId, host: isize, owner: isize, text: &str) -> Option
             let cols = m.get("cols").and_then(|v| v.as_u64()).unwrap_or(100).clamp(20, 500) as u16;
             let rows = m.get("rows").and_then(|v| v.as_u64()).unwrap_or(30).clamp(5, 300) as u16;
             let light = m.get("light").and_then(|v| v.as_bool()).unwrap_or(false);
+            let history = m.get("key").and_then(|v| v.as_str()).and_then(history_file);
             let dir = m.get("dir").and_then(|v| v.as_str()).map(PathBuf::from).filter(|d| d.is_dir()).or_else(dirs::home_dir).unwrap_or_else(|| PathBuf::from("C:\\"));
             HOSTS.with_borrow_mut(|h| h.insert(host, id));
             // (a reload starts a new shell; the old one goes with its session)
             let old = SESSIONS.with_borrow_mut(|s| s.remove(&id));
             drop(old);
-            match start(host, owner, &dir, cols, rows, light) {
+            // last run's output first, pushed up into the scrollback (the shell clears the screen as it starts)
+            if let Some(saved) = history.as_ref().and_then(|f| std::fs::read(f).ok()).filter(|b| !b.is_empty()) {
+                let mut b = rf_pulse::agents::Ring::replay(&saved);
+                b.extend_from_slice(b"\r\n\x1b[2m\xe2\x94\x80\xe2\x94\x80 restored from the last session \xe2\x94\x80\xe2\x94\x80\x1b[0m");
+                b.extend(std::iter::repeat_n(b"\r\n".as_slice(), rows as usize).flatten());
+                // (and the card starts on the top line again: its pulse line is drawn at fixed rows)
+                b.extend_from_slice(b"\x1b[H");
+                crate::web_view::post(id, &serde_json::json!({"t": "out", "d": rf_pulse::term::base64(&b)}).to_string());
+            }
+            match start(host, owner, &dir, cols, rows, light, history) {
                 Ok(s) => {
                     SESSIONS.with_borrow_mut(|all| all.insert(id, s));
                 }
@@ -311,7 +353,7 @@ fn welcome(dir: &Path, light: bool) -> rf_pulse::welcome::Info {
     }
 }
 
-fn start(host: isize, owner: isize, dir: &Path, cols: u16, rows: u16, light: bool) -> anyhow::Result<Session> {
+fn start(host: isize, owner: isize, dir: &Path, cols: u16, rows: u16, light: bool, history: Option<PathBuf>) -> anyhow::Result<Session> {
     let info = welcome(dir, light);
     let card = rf_pulse::welcome::render(&info, cols as usize);
     let frames = rf_pulse::welcome::frames(&info, cols as usize, 1);
@@ -330,7 +372,7 @@ fn start(host: isize, owner: isize, dir: &Path, cols: u16, rows: u16, light: boo
     let mut reader = pair.master.try_clone_reader()?;
     let writer = pair.master.take_writer()?;
 
-    let shared = Arc::new(Mutex::new(Shared::default()));
+    let shared = Arc::new(Mutex::new(Shared { ring: history.is_some().then(|| rf_pulse::agents::Ring::new(256 * 1024)), ..Default::default() }));
     let alive = Arc::new(AtomicBool::new(true));
     {
         let (shared, alive) = (shared.clone(), alive.clone());
@@ -349,6 +391,10 @@ fn start(host: isize, owner: isize, dir: &Path, cols: u16, rows: u16, light: boo
                 {
                     let Ok(mut sh) = shared.lock() else { break };
                     sh.last_output = Some(Instant::now());
+                    if let Some(r) = sh.ring.as_mut() {
+                        r.push(chunk);
+                        sh.dirty = true;
+                    }
                     sh.rang |= rang;
                     for t in said {
                         match rf_pulse::term::title(&t) {
@@ -390,11 +436,31 @@ fn start(host: isize, owner: isize, dir: &Path, cols: u16, rows: u16, light: boo
     }
     {
         // the status follows time too (an agent gone quiet is waiting): a beat while the shell lives
-        let alive = alive.clone();
+        // and the kept output is written now and then (off the UI thread), once more when the shell ends
+        let (alive, shared) = (alive.clone(), shared.clone());
         std::thread::Builder::new().name("terminal-beat".into()).spawn(move || {
-            while alive.load(Ordering::Relaxed) {
+            let mut since_save = 0u32;
+            loop {
+                let live = alive.load(Ordering::Relaxed);
                 std::thread::sleep(std::time::Duration::from_millis(500));
                 wake(host);
+                since_save += 1;
+                if since_save >= 6 || !live {
+                    since_save = 0;
+                    let bytes = shared.lock().ok().and_then(|mut sh| {
+                        let dirty = std::mem::take(&mut sh.dirty);
+                        sh.ring.as_ref().filter(|_| dirty).map(|r| r.bytes().to_vec())
+                    });
+                    if let (Some(b), Some(f)) = (bytes, history.as_ref()) {
+                        if let Some(d) = f.parent() {
+                            let _ = std::fs::create_dir_all(d);
+                        }
+                        let _ = std::fs::write(f, b);
+                    }
+                }
+                if !live {
+                    break;
+                }
             }
         })?;
     }
@@ -487,5 +553,8 @@ mod tests {
         assert!(!u.contains(' '));
         assert_eq!(dir_of(&u).as_deref(), Some(d));
         assert!(dir_of("https://example.com/?dir=C%3A%5C").is_none());
+        assert!(u.contains("&s="));
+        let key = u.rsplit("&s=").next().unwrap();
+        assert!(key.bytes().all(|b| b.is_ascii_hexdigit()));
     }
 }
