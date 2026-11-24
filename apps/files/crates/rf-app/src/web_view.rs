@@ -255,12 +255,12 @@ pub fn place(id: EntityId, bounds: RECT) {
     }
 }
 
-/// Hides every page of window `hwnd` but the one of tab `keep` (the workspace calls it each frame with its active tab).
-pub fn show_only(hwnd: isize, keep: Option<EntityId>) {
+/// Hides every page of window `hwnd` but those of `keep` (the workspace calls it each frame with the panes of its active tab).
+pub fn show_only(hwnd: isize, keep: &[EntityId]) {
     let hide: Vec<(isize, Option<ICoreWebView2Controller>)> = TABS.with_borrow_mut(|tabs| {
         let mut v = Vec::new();
         for (id, t) in tabs.iter_mut() {
-            if t.hwnd == hwnd && Some(*id) != keep && t.visible {
+            if t.hwnd == hwnd && !keep.contains(id) && t.visible {
                 t.visible = false;
                 v.push((t.host, t.controller.clone()));
             }

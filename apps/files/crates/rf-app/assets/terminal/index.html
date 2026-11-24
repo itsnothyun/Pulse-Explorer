@@ -25,7 +25,10 @@
 // Pulse Explorer's terminal tab on Windows (rf-app terminal.rs): xterm.js here, a ConPTY shell in the app. Messages go both
 // ways as JSON over WebView2's postMessage: we send ready/in/size/cmd, the app sends out/frames/title/exit.
 const host = window.chrome && window.chrome.webview;
-const dir = new URLSearchParams(location.search).get("dir") || "";
+const query = new URLSearchParams(location.search);
+const dir = query.get("dir") || "";
+// the tab's own key: its output is kept under it and shown again when the app opens the tab next time
+const key = query.get("s") || "";
 const light = matchMedia("(prefers-color-scheme: light)").matches;
 const dark = { background: "#00000000", foreground: "#e4e4e7", cursor: "#a78bfa", cursorAccent: "#090909", selectionBackground: "#a78bfa55",
   black: "#27272a", red: "#f87171", green: "#4ade80", yellow: "#facc15", blue: "#60a5fa", magenta: "#c084fc", cyan: "#22d3ee", white: "#e4e4e7",
@@ -51,7 +54,7 @@ const decode = (b64) => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
 function start() {
   ended = false;
   document.getElementById("ended").style.display = "none";
-  send({ t: "ready", dir, cols: term.cols, rows: term.rows, light });
+  send({ t: "ready", dir, key, cols: term.cols, rows: term.rows, light });
 }
 
 term.onData((d) => {
@@ -87,7 +90,8 @@ term.attachCustomKeyEventHandler((e) => {
   if (e.ctrlKey && !e.shiftKey && k === "-") { setFont(fontSize - 1); return false; }
   if (e.ctrlKey && !e.shiftKey && k === "0") { setFont(13); return false; }
   if (e.ctrlKey && !e.shiftKey && k === "w") { send({ t: "cmd", v: "close" }); return false; }
-  if (e.ctrlKey && e.shiftKey && (e.code === "Backquote" || k === "t")) { send({ t: "cmd", v: "new" }); return false; }
+  if (e.ctrlKey && e.shiftKey && e.code === "Backquote") { send({ t: "cmd", v: "new" }); return false; }
+  if (e.ctrlKey && e.shiftKey && k === "a") { send({ t: "cmd", v: "agents" }); return false; }
   if (e.ctrlKey && k === "f" && e.shiftKey) { return true; }
   return true;
 });
