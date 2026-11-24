@@ -1060,7 +1060,14 @@ impl Workspace {
             FolderEvent::ShowAgents => this.show_agents(window, cx),
             FolderEvent::CloseTab => {
                 if let Some(ix) = this.tabs.iter().position(|t| &t.left == emitter || t.right.as_ref() == Some(emitter)) {
-                    this.close_tab(ix, window, cx);
+                    if this.tabs[ix].right.is_some() {
+                        // a split tab loses only the pane that asked (a terminal beside a folder closes, the folder stays)
+                        this.active = ix;
+                        this.tabs[ix].right_active = this.tabs[ix].right.as_ref() == Some(emitter);
+                        this.close_active_pane(window, cx);
+                    } else {
+                        this.close_tab(ix, window, cx);
+                    }
                 }
             }
             FolderEvent::ToOtherPane(kind, paths) => {
@@ -4165,9 +4172,14 @@ impl Render for Workspace {
             }
         }
         {
-            let active = self.active_tab().read(cx);
-            let keep = matches!(active.location(), Location::Web { .. }).then(|| self.active_tab().entity_id());
-            crate::web_view::show_only(crate::look::window::hwnd_of(window), keep);
+            // the pages of the tab in front, both panes when it is split (a terminal beside a folder, two terminals)
+            let t = &self.tabs[self.active];
+            let keep: Vec<EntityId> = std::iter::once(&t.left)
+                .chain(t.right.as_ref())
+                .filter(|v| matches!(v.read(cx).location(), Location::Web { .. }))
+                .map(|v| v.entity_id())
+                .collect();
+            crate::web_view::show_only(crate::look::window::hwnd_of(window), &keep);
         }
         let p = Palette::for_window(window);
         // (the Open / Save window is matte: see `Palette::matte`)
