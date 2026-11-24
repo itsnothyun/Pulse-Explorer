@@ -137,7 +137,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func saveSession() {
         // development copies (RF_NOFERRY) leave the owner's session alone
         guard !restoring, ProcessInfo.processInfo.environment["RF_NOFERRY"] == nil else { return }
-        Sessions.save(controllers.map { Sessions.Window(tabs: $0.tabAddresses, active: $0.activeTab) })
+        Sessions.save(controllers.map { Sessions.Window(tabs: $0.tabAddresses, active: $0.activeTab, names: $0.tabNames) })
     }
 
     /// The first windows, as General › When rustyfiles starts says.
@@ -148,7 +148,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard !windows.isEmpty else { openWindow(at: home); return }
             restoring = true
             for w in windows {
-                openWindow(at: home).restore(w.tabs, active: w.active)
+                openWindow(at: home).restore(w.tabs, active: w.active, names: w.names ?? [])
             }
             restoring = false
             saveSession()

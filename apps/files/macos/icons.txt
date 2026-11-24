@@ -49,6 +49,7 @@ palette
 panel-left
 panel-right
 pencil
+pencil-line
 pin
 pin-off
 plus

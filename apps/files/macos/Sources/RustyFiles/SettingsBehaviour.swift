@@ -180,6 +180,8 @@ enum Sessions {
     struct Window: Codable {
         var tabs: [String]
         var active: Int
+        /// Names given to the tabs (Rename Tab); absent in sessions saved before there were names.
+        var names: [String]? = nil
     }
 
     private static let key = "lastSession"
