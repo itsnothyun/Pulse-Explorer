@@ -173,3 +173,92 @@ pub fn set_image(owner: HWND, w: u32, h: u32, rgba: &[u8], png: &[u8]) -> anyhow
     }
     Ok(())
 }
+
+/// The clipboard's raw bytes in `format` (a copy), or None.
+unsafe fn bytes_of(format: u32) -> Option<Vec<u8>> {
+    unsafe {
+        let h = GetClipboardData(format).ok()?;
+        let hg = HGLOBAL(h.0);
+        let size = GlobalSize(hg);
+        let p = GlobalLock(hg) as *const u8;
+        if p.is_null() || size == 0 {
+            return None;
+        }
+        let out = std::slice::from_raw_parts(p, size).to_vec();
+        let _ = GlobalUnlock(hg);
+        Some(out)
+    }
+}
+
+/// Text on the clipboard (CF_UNICODETEXT), for Pulse's "Paste as file".
+pub fn get_text(owner: HWND) -> Option<String> {
+    const CF_UNICODETEXT: u32 = 13;
+    if unsafe { IsClipboardFormatAvailable(CF_UNICODETEXT) }.is_err() {
+        return None;
+    }
+    let _g = open(owner).ok()?;
+    let raw = unsafe { bytes_of(CF_UNICODETEXT) }?;
+    let units: Vec<u16> = raw.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).take_while(|&u| u != 0).collect();
+    Some(String::from_utf16_lossy(&units))
+}
+
+/// A picture on the clipboard as PNG: the "PNG" format when an app put one there, else the bitmap (CF_DIB, 24 or 32 bit)
+/// encoded. For Pulse's "Paste as file".
+pub fn get_png(owner: HWND) -> Option<Vec<u8>> {
+    use windows::Win32::System::Ole::CF_DIB;
+    let png_fmt = unsafe { RegisterClipboardFormatW(w!("PNG")) };
+    let has_png = unsafe { IsClipboardFormatAvailable(png_fmt) }.is_ok();
+    let has_dib = unsafe { IsClipboardFormatAvailable(CF_DIB.0 as u32) }.is_ok();
+    if !has_png && !has_dib {
+        return None;
+    }
+    let _g = open(owner).ok()?;
+    if has_png {
+        if let Some(b) = unsafe { bytes_of(png_fmt) }.filter(|b| b.starts_with(b"\x89PNG")) {
+            return Some(b);
+        }
+    }
+    let dib = unsafe { bytes_of(CF_DIB.0 as u32) }?;
+    dib_to_png(&dib)
+}
+
+/// A packed DIB (BITMAPINFOHEADER + pixels, 24/32 bit, uncompressed or BI_BITFIELDS) as PNG.
+pub fn dib_to_png(dib: &[u8]) -> Option<Vec<u8>> {
+    let rd32 = |o: usize| dib.get(o..o + 4).map(|b| i32::from_le_bytes([b[0], b[1], b[2], b[3]]));
+    let header = rd32(0)? as usize;
+    let w = rd32(4)?;
+    let h = rd32(8)?;
+    let bits = u16::from_le_bytes([*dib.get(14)?, *dib.get(15)?]) as usize;
+    let compression = rd32(16)?;
+    if w <= 0 || h == 0 || !(bits == 24 || bits == 32) || !(compression == 0 || compression == 3) {
+        return None;
+    }
+    let (w, top_down) = (w as usize, h < 0);
+    let h = h.unsigned_abs() as usize;
+    // BI_BITFIELDS with a plain header: three masks follow it
+    let offset = header + if compression == 3 && header == 40 { 12 } else { 0 };
+    let stride = (w * bits / 8 + 3) & !3;
+    let pixels = dib.get(offset..offset + stride * h)?;
+    let mut rgba = vec![0u8; w * h * 4];
+    let mut any_alpha = false;
+    for y in 0..h {
+        let src = &pixels[(if top_down { y } else { h - 1 - y }) * stride..];
+        for x in 0..w {
+            let p = &src[x * bits / 8..];
+            let d = &mut rgba[(y * w + x) * 4..(y * w + x) * 4 + 4];
+            d[0] = p[2];
+            d[1] = p[1];
+            d[2] = p[0];
+            d[3] = if bits == 32 { p[3] } else { 255 };
+            any_alpha |= bits == 32 && p[3] != 0;
+        }
+    }
+    // many apps leave the 32-bit alpha at 0: an all-transparent picture is really an opaque one
+    if bits == 32 && !any_alpha {
+        rgba.chunks_exact_mut(4).for_each(|p| p[3] = 255);
+    }
+    let img = image::RgbaImage::from_raw(w as u32, h as u32, rgba)?;
+    let mut out = std::io::Cursor::new(Vec::new());
+    img.write_to(&mut out, image::ImageFormat::Png).ok()?;
+    Some(out.into_inner())
+}

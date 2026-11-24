@@ -1,0 +1,17 @@
+[package]
+name = "rf-pulse"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Pulse Explorer's file-manager tools as plain logic (naming, paste as file, space and duplicates, scripts, notes, workspaces, agents, the terminal welcome card): shared by the Windows app, tested on every OS"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+regex = { workspace = true }
+chrono = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

@@ -31,6 +31,8 @@ pub enum WebEvent {
     Title(String),
     /// A link asked for a new window: it opens as a new tab.
     NewTab(String),
+    /// A terminal tab's page asked for something its keys mean (`terminal::Command`).
+    Terminal(crate::terminal::Command),
 }
 
 #[derive(Default)]
@@ -126,6 +128,11 @@ fn create_host(owner: isize) -> isize {
     use windows::core::w;
     static REGISTERED: std::sync::Once = std::sync::Once::new();
     unsafe extern "system" fn proc(h: HWND, m: u32, w: windows::Win32::Foundation::WPARAM, l: windows::Win32::Foundation::LPARAM) -> windows::Win32::Foundation::LRESULT {
+        // a terminal tab's shell has output for its page
+        if m == crate::terminal::WAKE {
+            crate::terminal::pump(h.0 as isize);
+            return windows::Win32::Foundation::LRESULT(0);
+        }
         unsafe { DefWindowProcW(h, m, w, l) }
     }
     let Ok(module) = (unsafe { GetModuleHandleW(None) }) else { return 0 };
@@ -287,6 +294,7 @@ pub fn title(id: EntityId) -> Option<String> {
 
 /// The tab is gone: its page closes and its browser process lets go of it.
 pub fn close(id: EntityId) {
+    crate::terminal::close(id);
     if let Some(t) = TABS.with_borrow_mut(|tabs| tabs.remove(&id)) {
         if let Some(c) = t.controller {
             let _ = unsafe { c.Close() };
@@ -401,6 +409,32 @@ fn create_controller(id: EntityId, env: &ICoreWebView2Environment) {
                 })),
                 &mut token,
             )?;
+            // terminal tabs: our page from the app's files, and its messages to the shell behind it (only from that page)
+            if let (Some(dir), Ok(w3)) = (crate::terminal::page_dir(), webview.cast::<ICoreWebView2_3>()) {
+                let (host, folder) = (HSTRING::from(crate::terminal::HOST), HSTRING::from(dir.as_os_str()));
+                let _ = w3.SetVirtualHostNameToFolderMapping(windows::core::PCWSTR(host.as_ptr()), windows::core::PCWSTR(folder.as_ptr()), COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND_DENY_CORS);
+            }
+            webview.add_WebMessageReceived(
+                &WebMessageReceivedEventHandler::create(Box::new(move |_, args| {
+                    let Some(args) = args else { return Ok(()) };
+                    let mut src = PWSTR::null();
+                    args.Source(&mut src)?;
+                    if !crate::terminal::is_terminal(&take_pwstr(src)) {
+                        return Ok(());
+                    }
+                    let mut s = PWSTR::null();
+                    if args.TryGetWebMessageAsString(&mut s).is_err() {
+                        return Ok(());
+                    }
+                    let text = take_pwstr(s);
+                    let Some((host, owner)) = TABS.with_borrow(|tabs| tabs.get(&id).map(|t| (t.host, t.hwnd))) else { return Ok(()) };
+                    if let Some(cmd) = crate::terminal::on_message(id, host, owner, &text) {
+                        send(id, |_| WebEvent::Terminal(cmd));
+                    }
+                    Ok(())
+                })),
+                &mut token,
+            )?;
             webview.add_NewWindowRequested(
                 &NewWindowRequestedEventHandler::create(Box::new(move |_, args| {
                     if let Some(args) = args {
@@ -436,6 +470,15 @@ fn create_controller(id: EntityId, env: &ICoreWebView2Environment) {
     }));
     if let Err(e) = unsafe { env.CreateCoreWebView2Controller(HWND(hwnd as *mut _), &handler) } {
         log::warn!("web: create controller: {e}");
+    }
+}
+
+/// Sends a message to tab `id`'s page (a terminal tab's output and names).
+pub fn post(id: EntityId, json: &str) {
+    let Some(w) = TABS.with(|tabs| tabs.try_borrow().ok().and_then(|t| t.get(&id).and_then(|t| t.webview.clone()))) else { return };
+    let text = HSTRING::from(json);
+    if let Err(e) = unsafe { w.PostWebMessageAsString(windows::core::PCWSTR(text.as_ptr())) } {
+        log::debug!("terminal: post: {e}");
     }
 }
 

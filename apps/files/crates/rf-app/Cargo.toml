@@ -18,6 +18,8 @@ path = "src/bin/directlook.rs"
 ureq = "3.5"
 rf-core.workspace = true
 rf-win.workspace = true
+# Pulse tools and the terminal logic shared with the Mac (pulse_tools.rs)
+rf-pulse.workspace = true
 # the Open/Save dialog request types (the DLL itself is a separate build output)
 rf-dialog = { path = "../rf-dialog" }
 # installer and auto-update (GitHub Releases)
@@ -29,6 +31,8 @@ rustdecoder.workspace = true
 gpui-kit.workspace = true
 # Pulse Explorer's browser tabs: Edge's WebView2 as a child of the window (web_view.rs)
 webview2-com = "0.39"
+# terminal tabs: PowerShell in a ConPTY behind xterm.js (terminal.rs)
+portable-pty = "0.9"
 anyhow.workspace = true
 log.workspace = true
 env_logger = "0.11"

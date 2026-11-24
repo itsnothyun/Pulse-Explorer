@@ -198,6 +198,8 @@ pub enum FolderEvent {
     NeedPassword(PathBuf, bool),
     /// Open/Save dialog: files were opened (double click, Enter): they are the answer.
     Picked(Vec<PathBuf>),
+    /// The view's tab closes (a terminal tab's Ctrl+W, which its page gets before the app).
+    CloseTab,
 }
 
 /// Details columns shown right now (see `FolderView::visible_cols`).
@@ -748,6 +750,7 @@ impl FolderView {
             Location::Search { .. } => L::Search,
             Location::Tag(_) => L::Tag,
             Location::Pulse { key, .. } => crate::pulse_library::icon(key),
+            Location::Web { url } if crate::terminal::is_terminal(url) => L::SquareTerminal,
             Location::Web { .. } => L::Globe,
             Location::Library { .. } => L::Library,
             Location::Shell { .. } => L::Usb,
@@ -1046,6 +1049,15 @@ impl FolderView {
             }
             WebEvent::Title(_) => {}
             WebEvent::NewTab(url) => cx.emit(FolderEvent::OpenInNewTab(Location::Web { url })),
+            WebEvent::Terminal(crate::terminal::Command::Close) => cx.emit(FolderEvent::CloseTab),
+            WebEvent::Terminal(crate::terminal::Command::New) => {
+                let dir = match self.location() {
+                    Location::Web { url } => crate::terminal::dir_of(url),
+                    _ => None,
+                };
+                let dir = dir.or_else(dirs::home_dir).unwrap_or_default();
+                cx.emit(FolderEvent::OpenInNewTab(Location::Web { url: crate::terminal::url_for(&dir) }));
+            }
         }
         cx.notify();
     }
