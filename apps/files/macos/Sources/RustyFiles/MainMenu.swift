@@ -74,6 +74,7 @@ enum MainMenu {
         m.addItem(.separator())
         m.addItem(item(String(localized: "Properties"), #selector(W.showProperties(_:)), "i"))
         m.addItem(.separator())
+        m.addItem(item(String(localized: "Rename Tab…"), #selector(W.renameTab(_:))))
         m.addItem(item(String(localized: "Close Tab"), #selector(W.closeTab(_:)), "w"))
         m.addItem(item(String(localized: "Reopen Closed Tab"), #selector(W.reopenClosedTab(_:)), "t", [.command, .shift]))
         m.addItem(item(String(localized: "Close Window"), #selector(NSWindow.performClose(_:)), "w", [.command, .shift]))

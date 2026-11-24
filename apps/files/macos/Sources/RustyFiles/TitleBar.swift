@@ -17,6 +17,8 @@ final class TabStripView: HoverView {
     var active = 0 { didSet { needsDisplay = true; superview?.needsLayout = true } }
     var onSelect: ((Int) -> Void)?
     var onClose: ((Int) -> Void)?
+    /// A double click on a tab (it gets a name of its own).
+    var onRename: ((Int) -> Void)?
     /// The tab menu for the tab at this index (workspace.rs `tab_menu`).
     var menuFor: ((Int) -> NSMenu?)?
 
@@ -105,6 +107,7 @@ final class TabStripView: HoverView {
             return
         }
         onSelect?(i)
+        if event.clickCount == 2 { onRename?(i) }
     }
 
     override func mouseUp(with event: NSEvent) {

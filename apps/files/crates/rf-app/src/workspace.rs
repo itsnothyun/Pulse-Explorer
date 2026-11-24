@@ -96,6 +96,8 @@ struct Tab {
     left: Entity<FolderView>,
     right: Option<Entity<FolderView>>,
     right_active: bool,
+    /// A name the user gave the tab (Rename tab), shown instead of the folder's or page's.
+    name: Option<String>,
 }
 
 impl Tab {
@@ -400,6 +402,19 @@ fn panes_to_restore(panes: &[crate::settings::SessionPane], tabs: usize) -> Vec<
 
 /// What tells that the session has to be written again: the places of all panes (not which pane has the focus: a click from one
 /// pane to the other is not worth a write of the settings file; the focus is written when the places change and at exit).
+/// What the tab strip shows for a tab: the name it was given (an agent's working / waiting mark still in front), else its own.
+fn tab_title(name: Option<&str>, own: String) -> String {
+    match name {
+        Some(n) => format!("{}{n}", &own[..own.len() - strip_mark(&own).len()]),
+        None => own,
+    }
+}
+
+/// A terminal tab's title without its agent mark ("◐ Claude Code" → "Claude Code").
+fn strip_mark(title: &str) -> &str {
+    title.strip_prefix("◌ ").or_else(|| title.strip_prefix("◐ ")).unwrap_or(title)
+}
+
 fn session_key(left: &[String], panes: &[crate::settings::SessionPane]) -> Vec<String> {
     left.iter().cloned().chain(panes.iter().map(|p| format!("\u{1}{}\u{1}{}", p.tab, p.location))).collect()
 }
@@ -872,6 +887,7 @@ impl Workspace {
                 for t in &named.tabs {
                     this.open_tab(session_place(t), window, cx);
                 }
+                this.restore_names(&named.names);
                 if this.tabs.is_empty() {
                     this.open_tab(Location::Home, window, cx);
                 }
@@ -885,6 +901,7 @@ impl Workspace {
                 for t in &prefs.session_tabs {
                     this.open_tab(session_place(t), window, cx);
                 }
+                this.restore_names(&prefs.session_names);
                 // the tabs that were split in two get their second pane back, at its own folder and with the focus where it was
                 for (ix, loc, active) in panes_to_restore(&prefs.session_panes, this.tabs.len()) {
                     this.open_second_pane(ix, loc, active, window, cx);
@@ -977,9 +994,11 @@ impl Workspace {
             [f32::from(b.origin.x), f32::from(b.origin.y), f32::from(b.size.width), f32::from(b.size.height), max]
         });
         let (tabs, panes) = self.session_now(cx);
+        let names = self.tab_names();
         let active = self.active;
         cx.update_global::<crate::settings::Settings, _>(|s, _| {
             s.session_tabs = tabs;
+            s.session_names = names;
             s.session_panes = panes;
             s.session_active = active;
             if placement.is_some() {
@@ -988,6 +1007,20 @@ impl Workspace {
         });
         // synchronous: the process is about to exit
         cx.global::<crate::settings::Settings>().save();
+    }
+
+    /// The names given to the tabs, in order ("" = the tab's own name).
+    fn tab_names(&self) -> Vec<String> {
+        self.tabs.iter().map(|t| t.name.clone().unwrap_or_default()).collect()
+    }
+
+    /// Names tabs that came back from a session (`names` in the order the tabs were opened, from tab 0).
+    fn restore_names(&mut self, names: &[String]) {
+        for (t, n) in self.tabs.iter_mut().zip(names) {
+            if !n.trim().is_empty() {
+                t.name = Some(n.clone());
+            }
+        }
     }
 
     /// The tabs as the session keeps them, now ([`session_record`]).
@@ -1134,7 +1167,7 @@ impl Workspace {
 
     pub fn open_tab(&mut self, loc: Location, window: &mut Window, cx: &mut Context<Self>) {
         let view = self.new_view(loc, window, cx);
-        self.tabs.push(Tab { left: view.clone(), right: None, right_active: false });
+        self.tabs.push(Tab { left: view.clone(), right: None, right_active: false, name: None });
         let ix = self.tabs.len() - 1;
         // Settings → Appearance → Animations: the "+" grows into the new tab, then a new "+"
         // slides out from behind it. Purely visual: the tab is already open and usable.
@@ -1288,6 +1321,7 @@ impl Workspace {
             self.closed.push(tab.view().read(cx).location().clone());
         }
         self.tab_scrolled_to = None;
+        self.restore_names(&named.names);
         self.session_name = Some(named.name.clone());
         let a = named.active.min(self.tabs.len() - 1);
         self.activate(a, window, cx);
@@ -1310,6 +1344,45 @@ impl Workspace {
     fn open_browser_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.open_tab(Location::Web { url: "about:blank".into() }, window, cx);
         self.begin_address_edit(window, cx);
+    }
+
+    /// Asks for a name for tab `ix` (an empty one gives the tab back its own: the folder's or the page's).
+    pub(crate) fn rename_tab(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(tab) = self.tabs.get(ix) else { return };
+        // the tab is found again by its view when the answer comes (tabs may have moved meanwhile)
+        let left = tab.left.clone();
+        let current = tab.name.clone().unwrap_or_else(|| strip_mark(&tab.view().read(cx).title(cx)).to_string());
+        let named = tab.name.is_some();
+        let me = cx.entity().downgrade();
+        let set = move |name: Option<String>, cx: &mut App| {
+            let left = left.clone();
+            let _ = me.update(cx, |ws, cx| {
+                if let Some(t) = ws.tabs.iter_mut().find(|t| t.left == left) {
+                    t.name = name.map(|n| n.trim().to_string()).filter(|n| !n.is_empty());
+                    cx.notify();
+                }
+            });
+        };
+        let set2 = set.clone();
+        let mut buttons = vec![crate::prompt::Button::new(crate::i18n::tx("Yeniden adlandır", "Rename"), crate::prompt::Kind::Primary, move |input, _, cx| {
+            set(input, cx);
+            Ok(())
+        })];
+        if named {
+            buttons.push(crate::prompt::Button::new(crate::i18n::tx("Özgün adı kullan", "Use its own name"), crate::prompt::Kind::Normal, move |_, _, cx| {
+                set2(None, cx);
+                Ok(())
+            }));
+        }
+        buttons.push(crate::prompt::Button::new(crate::i18n::tx("Vazgeç", "Cancel"), crate::prompt::Kind::Normal, |_, _, _| Ok(())));
+        crate::prompt::show(
+            crate::i18n::tx("Sekmeyi yeniden adlandır", "Rename tab"),
+            None,
+            Some((current, crate::i18n::tx("Sekmenin adı", "Tab name").to_string())),
+            buttons,
+            window,
+            cx,
+        );
     }
 
     /// Pulse Explorer's terminal: a new tab with a shell in `dir` (`terminal`).
@@ -1356,7 +1429,11 @@ impl Workspace {
                 Status::Idle => L::SquareTerminal,
             };
             let what = if r.alive { r.status.label() } else { crate::i18n::tx("Kabuk kapandı", "Shell ended") };
-            let label = if r.name == r.folder { r.name.clone() } else { format!("{} · {}", r.name, r.folder) };
+            let label = match &self.tabs[ix].name {
+                Some(n) => format!("{n} · {}", r.name),
+                None if r.name == r.folder => r.name.clone(),
+                None => format!("{} · {}", r.name, r.folder),
+            };
             let me = me.clone();
             items.push(
                 Item::action(label, MenuIcon::Lucide(icon), move |w: &mut Window, cx: &mut App| {
@@ -1471,6 +1548,7 @@ impl Workspace {
     /// Asks for a name and saves this window's tabs under it (`settings::NamedSession`); a name already taken is replaced.
     fn save_named_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let (tabs, panes) = self.session_now(cx);
+        let names = self.tab_names();
         let active = self.active;
         let count = cx.global::<crate::settings::Settings>().saved_sessions.len();
         let first = self.session_name.clone().unwrap_or_else(|| format!("{} {}", t!("Oturum"), count + 1));
@@ -1485,7 +1563,7 @@ impl Workspace {
                     if name.is_empty() {
                         return Err(t!("Bir ad yazın.").to_string());
                     }
-                    let session = crate::settings::NamedSession { name: name.clone(), tabs: tabs.clone(), panes: panes.clone(), active };
+                    let session = crate::settings::NamedSession { name: name.clone(), tabs: tabs.clone(), panes: panes.clone(), active, names: names.clone() };
                     crate::settings::update(cx, move |s| remember_named(&mut s.saved_sessions, session));
                     // (the window now holds that session: its name goes beside the tabs)
                     let _ = me.update(cx, |ws, cx| {
@@ -1520,6 +1598,7 @@ impl Workspace {
                 }
             }))
             .hint("Ctrl+Shift+K"),
+            Item::action(crate::i18n::tx("Sekmeyi yeniden adlandır…", "Rename tab…"), MenuIcon::Lucide(L::PencilLine), act(|ws, ix, w, cx| ws.rename_tab(ix, w, cx))),
             Item::action(t!("Yeni pencereye taşı"), MenuIcon::Lucide(L::AppWindow), act(|ws, ix, w, cx| ws.detach_tab(ix, w, cx))).enabled(n > 1),
             Item::Separator,
             Item::action(t!("Diğer sekmeleri kapat"), MenuIcon::None, act(|ws, ix, w, cx| {
@@ -2257,7 +2336,7 @@ impl Workspace {
         let mut tab_claimed = false;
         for (i, tab) in self.tabs.iter().enumerate() {
             let v = tab.view().read(cx);
-            let title = v.title(cx);
+            let title = tab_title(tab.name.as_deref(), v.title(cx));
             let icon = v.tab_icon();
             let tab_dir = v.location().path().map(Path::to_path_buf);
             let active = i == self.active;
@@ -2316,10 +2395,14 @@ impl Workspace {
                     )
                     .on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(move |this, _: &MouseDownEvent, window, cx| {
+                        cx.listener(move |this, ev: &MouseDownEvent, window, cx| {
                             // Keep the title bar from turning a tab drag into a window move.
                             cx.stop_propagation();
-                            this.activate(i, window, cx)
+                            this.activate(i, window, cx);
+                            // a double click names the tab
+                            if ev.click_count == 2 {
+                                this.rename_tab(i, window, cx);
+                            }
                         }),
                     )
                     .on_mouse_down(
@@ -4501,20 +4584,23 @@ impl Render for Workspace {
                 .child(action("coffee-no", t!("Bir daha gösterme"), 2))
         });
         // Taskbar title follows the active folder.
-        let title = format!("{} — Pulse Explorer", self.active_tab().read(cx).title(cx));
+        let title = format!("{} — Pulse Explorer", tab_title(self.tabs[self.active].name.as_deref(), self.active_tab().read(cx).title(cx)));
         if title != self.last_title {
             window.set_window_title(&title);
             self.last_title = title;
         }
         // Keep the saved session current (so it survives a crash or forced shutdown).
         let (session, panes) = self.session_now(cx);
-        let key = session_key(&session, &panes);
+        let names = self.tab_names();
+        let mut key = session_key(&session, &panes);
+        key.extend(names.iter().map(|n| format!("name:{n}")));
         if key != self.last_session && self.picker.is_none() {
             self.last_session = key;
             let active = self.active;
             cx.defer(move |cx| {
                 cx.update_global::<crate::settings::Settings, _>(|s, _| {
                     s.session_tabs = session;
+                    s.session_names = names;
                     s.session_panes = panes;
                     s.session_active = active;
                 });
@@ -4820,6 +4906,7 @@ impl Render for Workspace {
                 this.enter_search(window, cx);
             }))
             .on_action(cx.listener(|this, _: &ShowAgents, window, cx| this.show_agents(window, cx)))
+            .on_action(cx.listener(|this, _: &RenameTab, window, cx| this.rename_tab(this.active, window, cx)))
             .on_action(cx.listener(|this, _: &OpenTerminal, window, cx| {
                 // Pulse's own terminal tab (Windows Terminal stays on the "+" menu and the folder menus)
                 let dir = this.terminal_dir(cx);

@@ -33,6 +33,7 @@ gpui_kit::actions!(
         ToggleHidden,
         OpenTerminal,
         ShowAgents,
+        RenameTab,
         Properties,
         ClearSelection,
         CopyItems,

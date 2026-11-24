@@ -37,7 +37,18 @@ final class BrowserTab {
     /// A search's results (rustyfiles:search?in=…&q=…, SearchPlace).
     var search: (dir: URL, query: String)? { SearchPlace.parse(url) }
 
+    /// A name the user gave the tab (Rename Tab), shown instead of its own.
+    var customName: String?
+
+    /// What the tab strip shows: the given name (a terminal's agent mark still in front), else the tab's own.
     var info: TabInfo {
+        let own = ownInfo
+        guard let name = customName else { return own }
+        let mark = ["◐ ", "◌ ", "● "].first { own.title.hasPrefix($0) } ?? ""
+        return TabInfo(title: mark + name, icon: own.icon)
+    }
+
+    private var ownInfo: TabInfo {
         if isSettings { return TabInfo(title: String(localized: "Settings"), icon: "settings") }
         if isHome { return TabInfo(title: String(localized: "Home"), icon: "house") }
         if isTerminal { return TabInfo(title: term?.title ?? String(localized: "Terminal"), icon: "square-terminal") }
@@ -275,6 +286,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         }
         list.onOpenWeb = { [weak self] url in self?.openTab(url, activate: true) }
         titleBar.strip.onSelect = { [weak self] i in self?.activate(i) }
+        titleBar.strip.onRename = { [weak self] i in self?.renameTab(at: i) }
         titleBar.strip.onClose = { [weak self] i in self?.closeTab(at: i) }
 
         navBar.back.action = { [weak self] _ in self?.goBack(nil) }
@@ -447,13 +459,21 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
 
     /// The tabs' addresses, in order (paths, or rustyfiles:home / :settings).
     var tabAddresses: [String] { tabs.map { Sessions.string($0.url) } }
+    /// The names given to the tabs, in order ("" = the tab's own).
+    var tabNames: [String] { tabs.map { $0.customName ?? "" } }
     var activeTab: Int { active }
 
-    /// Opens these addresses as the window's tabs (a saved session).
-    func restore(_ addresses: [String], active a: Int) {
-        let urls = addresses.compactMap(Sessions.url)
-        guard !urls.isEmpty else { return }
-        tabs = urls.map { BrowserTab(url: $0) }
+    /// Opens these addresses as the window's tabs (a saved session), with the names they were given.
+    func restore(_ addresses: [String], active a: Int, names: [String] = []) {
+        let kept: [(URL, String)] = addresses.enumerated().compactMap { i, s in
+            Sessions.url(s).map { ($0, i < names.count ? names[i] : "") }
+        }
+        guard !kept.isEmpty else { return }
+        tabs = kept.map { url, name in
+            let t = BrowserTab(url: url)
+            t.customName = name.isEmpty ? nil : name
+            return t
+        }
         active = min(max(a, 0), tabs.count - 1)
         load(tab)
         refreshTabs()
@@ -490,6 +510,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
             self.activate(i)
             self.openTab(self.tabs[i].url)
         }
+        b.add(String(localized: "Rename tab…"), "pencil-line") { [weak self] in self?.renameTab(at: i) }
         b.add(String(localized: "Move to new window"), "app-window", enabled: n > 1) { [weak self] in
             guard let self, self.tabs.indices.contains(i) else { return }
             let url = self.tabs[i].url
@@ -507,6 +528,38 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
             self?.reopenClosedTab(nil)
         }
         return b.done()
+    }
+
+    @objc func renameTab(_ sender: Any?) { renameTab(at: active) }
+
+    /// Asks for a name for tab `i` (empty: the tab goes back to its own name).
+    func renameTab(at i: Int) {
+        guard tabs.indices.contains(i), let window else { return }
+        let tab = tabs[i]
+        let alert = NSAlert()
+        alert.messageText = String(localized: "Rename tab")
+        alert.informativeText = String(localized: "Leave it empty to show the tab's own name again.")
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
+        let own = tab.info.title
+        field.stringValue = tab.customName ?? ["◐ ", "◌ ", "● "].reduce(own) { $0.hasPrefix($1) ? String($0.dropFirst($1.count)) : $0 }
+        field.placeholderString = String(localized: "Tab name")
+        alert.accessoryView = field
+        alert.addButton(withTitle: String(localized: "Rename"))
+        alert.addButton(withTitle: String(localized: "Cancel"))
+        // Return in the field is Rename, the field empty too (the alert's own Return did nothing then)
+        field.target = alert.buttons.first
+        field.action = #selector(NSButton.performClick(_:))
+        alert.beginSheetModal(for: window) { [weak self] r in
+            MainActor.assumeIsolated {
+                guard r == .alertFirstButtonReturn else { return }
+                let name = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                tab.customName = name.isEmpty ? nil : name
+                self?.refreshTabs()
+                AppDelegate.shared.saveSession()
+            }
+        }
+        alert.window.makeFirstResponder(field)
+        field.selectText(nil)
     }
 
     private func closeTab(at i: Int) {

@@ -62,6 +62,7 @@ pub const EN: &[(&str, &str)] = &[
     ("Kenar çubuğu", "Sidebar"),
     ("Terminalde aç", "Open in terminal"),
     ("Ajanlar", "Agents"),
+    ("Sekmeyi yeniden adlandır…", "Rename tab…"),
     ("Tümünü seç", "Select all"),
     ("Kopyala", "Copy"),
     ("Kes", "Cut"),

@@ -3004,10 +3004,11 @@ fn pick_into(_window: &mut Window, cx: &mut App, title: &str, target: PickTarget
                     if let Ok(new) = Settings::parse_lenient_pub(text.trim_start_matches('\u{feff}')) {
                         // keep this machine's window placement and session
                         settings::update(cx, |s| {
-                            let (window, tabs, active) = (s.window, s.session_tabs.clone(), s.session_active);
+                            let (window, tabs, names, active) = (s.window, s.session_tabs.clone(), s.session_names.clone(), s.session_active);
                             *s = new;
                             s.window = window;
                             s.session_tabs = tabs;
+                            s.session_names = names;
                             s.session_active = active;
                         });
                     }
