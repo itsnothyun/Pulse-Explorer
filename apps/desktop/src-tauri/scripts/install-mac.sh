@@ -21,7 +21,11 @@ fi
 # a running copy would keep the old files open
 pkill -f "Pulse Explorer.app/Contents/MacOS" 2>/dev/null || true
 sleep 1
-codesign --force --deep --sign - "$BUNDLE" >/dev/null 2>&1
+# A stable signature keeps what macOS let the app do (Desktop, Documents, Downloads…) across rebuilds: an ad-hoc one is a new
+# app to macOS every build, and it asks again. The first Apple Development / Developer ID certificate in the keychain, or
+# PULSE_SIGN_ID; ad-hoc only when there is none.
+SIGN_ID="${PULSE_SIGN_ID:-$(security find-identity -v -p codesigning 2>/dev/null | awk '/Apple Development|Developer ID Application/ {print $2; exit}')}"
+codesign --force --deep --sign "${SIGN_ID:--}" "$BUNDLE" >/dev/null 2>&1
 rm -rf "$DEST"
 cp -R "$BUNDLE" "$DEST"
 

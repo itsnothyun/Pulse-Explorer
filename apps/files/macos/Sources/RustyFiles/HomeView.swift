@@ -1,4 +1,5 @@
 import AppKit
+import UniformTypeIdentifiers
 
 /// The Home page, in place of the folder in the content card (folder_view.rs `render_home`):
 /// Quick access, Drives and Recent, one under the other, 24 from the card's edges and 16 apart.
@@ -150,7 +151,9 @@ final class HomeView: FlippedView {
             // and nothing that is gone
             // nothing inside the Library, no apps (Recent is files and folders), nothing twice
             if path.contains("/Library/") || path.contains(".app/") || path.hasSuffix(".app") || !seen.insert(path).inserted { continue }
-            guard FileManager.default.fileExists(atPath: path) else { continue }
+            // (a file in a folder macOS guards and the user never opened here is taken on Spotlight's word: looking at it
+            // would bring up the permission prompt as the Home page opens)
+            guard !PrivacyGuard.mayRead(path) || FileManager.default.fileExists(atPath: path) else { continue }
             items.append((URL(fileURLWithPath: path), date))
             if items.count == 14 { break }
         }
@@ -358,7 +361,10 @@ final class RecentRow: HoverView {
     let url: URL
     let date: Date
     let action: () -> Void
-    private lazy var icon = NSWorkspace.shared.icon(forFile: url.path)
+    // (by its type for a file in a guarded folder never opened: reading the file's own icon would ask for permission)
+    private lazy var icon = PrivacyGuard.mayRead(url.path)
+        ? NSWorkspace.shared.icon(forFile: url.path)
+        : NSWorkspace.shared.icon(for: UTType(filenameExtension: url.pathExtension) ?? .data)
 
     init(url: URL, date: Date, action: @escaping () -> Void) {
         self.url = url

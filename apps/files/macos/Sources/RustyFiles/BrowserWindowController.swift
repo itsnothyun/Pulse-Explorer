@@ -654,6 +654,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
                 case .success(let f):
                     t.folder = f
                     t.error = nil
+                    // the user opened it: a folder macOS guards has had its question, the preview may look into it now
+                    if url.isFileURL { PrivacyGuard.noteOpened(url.path) }
                 case .failure(let e):
                     t.folder = nil
                     t.error = Self.describe(e, at: url)
