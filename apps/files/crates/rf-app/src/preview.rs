@@ -29,7 +29,9 @@ pub fn size_cache() -> &'static rf_win::foldersize::FolderSizeCache {
 pub struct Preview {
     target: Option<(PathBuf, Entry)>,
     text: Option<(PathBuf, SharedString)>,
-    folder_size: Option<(PathBuf, Option<rf_win::foldersize::FolderSize>)>,
+    /// The selected folder's size: (folder, (size, every file counted)) once known; a count stopped by its time limit is
+    /// shown as "at least".
+    folder_size: Option<(PathBuf, Option<(rf_win::foldersize::FolderSize, bool)>)>,
     hash: Option<Entity<crate::hash_panel::HashPanel>>,
     /// Media/document properties (duration, resolution, …) for the current target.
     media: Option<(PathBuf, Vec<(&'static str, String)>)>,
@@ -608,9 +610,10 @@ impl Preview {
         if e.is_dir() && !crate::archive_view::is_browsable_path(path) {
             let on_disk = cx.global::<crate::settings::Settings>().folder_size_on_disk;
             let txt = match &self.folder_size {
-                Some((fp, Some(fs))) if fp == path => {
+                Some((fp, Some((fs, complete)))) if fp == path => {
                     let shown = if on_disk { fs.allocated.unwrap_or(fs.bytes) } else { fs.bytes };
-                    format!("{} · {} {}, {} {}", format::size(shown), group(fs.files), t!("dosya"), group(fs.dirs), t!("klasör"))
+                    let size = if *complete { format::size(shown) } else { format!("{} {}", crate::i18n::tx("en az", "at least"), format::size(shown)) };
+                    format!("{} · {} {}, {} {}", size, group(fs.files), t!("dosya"), group(fs.dirs), t!("klasör"))
                 }
                 _ => t!("Hesaplanıyor…").to_string(),
             };
@@ -759,12 +762,25 @@ impl Preview {
                 self.size_cancel = cancel.clone();
                 let p = path.clone();
                 self.folder_size = Some((p.clone(), None));
-                let work = cx.background_spawn(async move {
-                    let cache = size_cache();
-                    cache.get_or_compute(&p, &|| cancel.load(std::sync::atomic::Ordering::Relaxed), &mut |_| {}).ok()
-                });
                 let p2 = path.clone();
                 cx.spawn(async move |this, cx| {
+                    // the count waits until the selection rests (the arrow keys pass over many folders: each started a walk
+                    // on every size worker), and stops after a few seconds with what it has, shown as "at least"
+                    cx.background_executor().timer(std::time::Duration::from_millis(450)).await;
+                    if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                        return;
+                    }
+                    let work = cx.background_executor().spawn(async move {
+                        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(4);
+                        let stop = || cancel.load(std::sync::atomic::Ordering::Relaxed) || std::time::Instant::now() >= deadline;
+                        let mut last = None;
+                        match size_cache().get_or_compute(&p, &stop, &mut |s| last = Some(*s)) {
+                            Ok(s) => Some((s, true)),
+                            // out of time (not moved away): what was counted so far
+                            Err(_) if !cancel.load(std::sync::atomic::Ordering::Relaxed) => last.map(|s| (s, false)),
+                            Err(_) => None,
+                        }
+                    });
                     let r = work.await;
                     let _ = this.update(cx, |v, cx| {
                         if let (Some((cur, slot)), Some(r)) = (v.folder_size.as_mut(), r) {

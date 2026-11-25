@@ -2657,7 +2657,9 @@ impl Workspace {
             Item::action(t!("Yolu kopyala"), MenuIcon::Lucide(L::ClipboardCopy), with(|_, p, _, cx| {
                 cx.write_to_clipboard(ClipboardItem::new_string(p.display().to_string()))
             })),
-            Item::action(t!("Terminalde aç"), MenuIcon::Lucide(L::SquareTerminal), with(|_, p, _, _| {
+            // Pulse's own terminal, a new tab there (Windows Terminal is the next item)
+            Item::action(t!("Terminalde aç"), MenuIcon::Lucide(L::SquareTerminal), with(|ws, p, w, cx| ws.open_terminal_tab(p, w, cx))).hint("Ctrl+Shift+`"),
+            Item::action(crate::i18n::tx("Windows Terminal'de aç", "Open in Windows Terminal"), MenuIcon::Lucide(L::ExternalLink), with(|_, p, _, _| {
                 std::thread::spawn(move || {
                     let _ = rf_win::shell::open_terminal(&p);
                 });

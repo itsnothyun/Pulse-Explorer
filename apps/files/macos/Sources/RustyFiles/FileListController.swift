@@ -29,6 +29,9 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
     private var settingsView: SettingsView?
     /// The Home page, the same way.
     private var homeView: HomeView?
+    /// The Settings or Home page is in front (the views stay once made, hidden while a folder shows: asking whether they
+    /// exist said "a page" in every folder after the first visit, and the preview pane stayed over the Home page).
+    private var pageShown: Bool { settingsView?.isHidden == false || homeView?.isHidden == false }
     private let message = NSTextField(wrappingLabelWithString: "")
     private let display = ItemDisplay()
     private var geometry = ListGeometry()
@@ -208,13 +211,13 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
         // Appearance › Show the command bar / status bar
         let barH = AppSettings.showCommandBar ? Metrics.commandBarHeight : 0
         let statusH = AppSettings.showStatusBar ? Metrics.statusBarHeight : 0
-        commandBar.isHidden = barH == 0 || settingsView != nil || homeView != nil
-        status.isHidden = statusH == 0 || settingsView != nil || homeView != nil
+        commandBar.isHidden = barH == 0 || pageShown
+        status.isHidden = statusH == 0 || pageShown
         // the pane: at the right of the list (never leaving it under 320 wide), or under it
         let bottom = AppSettings.previewAtBottom
         let ph = min(max(b.height * 0.38, 160), b.height - barH - 160)
         let pw = previewShown ? (bottom ? b.width : min(previewWidth, max(card.bounds.width - 320, 0))) : 0
-        let paneShown = previewShown && (bottom ? ph >= 120 : pw >= PreviewPane.minWidth) && settingsView == nil && homeView == nil
+        let paneShown = previewShown && (bottom ? ph >= 120 : pw >= PreviewPane.minWidth) && !pageShown
         previewPane.isHidden = !paneShown
         previewHandle.isHidden = !paneShown || bottom
         previewPane.atBottom = bottom
@@ -480,7 +483,8 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
         v.frame = card.bounds
         v.isHidden = false
         if let page { v.show(page) }
-        [commandBar, header, scroll, tileScroll, status, message, noteBanner].forEach { $0.isHidden = true }
+        [commandBar, header, scroll, tileScroll, status, message, noteBanner, previewPane, previewHandle].forEach { $0.isHidden = true }
+        card.needsLayout = true
         selectionChanged()
     }
 
@@ -498,7 +502,8 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
         }
         v.frame = card.bounds
         v.isHidden = false
-        [commandBar, header, scroll, tileScroll, status, message, noteBanner].forEach { $0.isHidden = true }
+        [commandBar, header, scroll, tileScroll, status, message, noteBanner, previewPane, previewHandle].forEach { $0.isHidden = true }
+        card.needsLayout = true
         selectionChanged()
     }
 
@@ -510,6 +515,8 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
         pages.forEach { $0.isHidden = true }
         commandBar.isHidden = false
         status.isHidden = false
+        // (the pane comes back where it was, the command and status bars as the settings say)
+        card.needsLayout = true
         applyViewMode()
     }
 
@@ -722,7 +729,7 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
         commandBar.new.isEnabled = inTrash ? (folder?.count() ?? 0) > 0 : here
         commandBar.share.isEnabled = any && writable && !inTrash
         commandBar.properties.isEnabled = writable
-        commandBar.preview.isEnabled = settingsView == nil && homeView == nil
+        commandBar.preview.isEnabled = !pageShown
         commandBar.preview.isOn = previewShown
         commandBar.view.icon = viewMode == .details ? "list" : "layout-grid"
     }
