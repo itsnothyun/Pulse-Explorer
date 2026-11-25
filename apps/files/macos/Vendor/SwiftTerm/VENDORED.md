@@ -16,3 +16,5 @@ Pulse's own changes to this copy, if any, are listed below so an update from ups
 - `Mac/MacLocalTerminalView.swift`: `setProcessBytesHandler(_:)` (and the adapter's `bytesTap`) hands the raw output
   bytes to the host before parsing, for Pulse's agent status and kept scrollback.
 - `Mac/MacTerminalView.swift`: `bellHandler`, told of every bell (whatever `bellStyle`), for agent status.
+- `TerminalIOPipeline.swift`: the gather and parse threads get 8 MB stacks (512 KB overflowed now and then under the
+  output tap: EXC_BAD_ACCESS in the stack guard of `swiftterm-io-reader`).

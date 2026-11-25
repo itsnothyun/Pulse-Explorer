@@ -73,6 +73,24 @@ public enum ProcessInspect {
         }
     }
 
+    /// The foreground process group of the terminal `pid` runs on, from the kernel's record of `pid` (kinfo_proc e_tpgid).
+    /// For a terminal that is not this process's own (a tmux pane), where tcgetpgrp on the tty answers nothing on macOS.
+    public static func terminalForeground(of pid: pid_t) -> pid_t? {
+        var info = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.stride
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+        guard sysctl(&mib, 4, &info, &size, nil, 0) == 0, size > 0 else { return nil }
+        let pg = info.kp_eproc.e_tpgid
+        return pg > 0 ? pg : nil
+    }
+
+    /// What the terminal of shell `shell` is doing, read from the kernel (no terminal descriptor needed: a tmux pane).
+    public static func activity(shell: pid_t) -> Activity {
+        let fg = terminalForeground(of: shell)
+        let program = fg.flatMap { $0 == shell ? nil : name(of: $0) }
+        return Activity(program: program, directory: cwd(of: shell))
+    }
+
     public static func activity(shell: pid_t, terminal fd: Int32) -> Activity {
         let fg = foreground(ofTerminal: fd)
         let program = fg.flatMap { $0 == shell ? nil : name(of: $0) }

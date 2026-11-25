@@ -68,6 +68,7 @@ square-chevron-right
 square-plus
 square-terminal
 external-link
+infinity
 sun-moon
 tag
 text-cursor-input

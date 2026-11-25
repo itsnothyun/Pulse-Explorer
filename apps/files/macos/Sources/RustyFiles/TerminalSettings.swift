@@ -33,6 +33,12 @@ enum TerminalSettings {
             .card(title: String(localized: "Box prompt"), detail: String(localized: "zsh's prompt drawn as the card's input box, with the folder and branch in its edge. Only replaces macOS's default prompt."), icon: "square-chevron-right",
                   control: toggle("terminalPrompt")),
             .section(String(localized: "Shell")),
+            .card(title: String(localized: "Keep terminals running when Pulse closes"),
+                  detail: TerminalSessions.tmux == nil
+                      ? String(localized: "Needs tmux (brew install tmux). Then quitting Pulse, or Pulse crashing, leaves your shells and agents running; they come back as tabs.")
+                      : String(localized: "Your shells and agents (Claude Code…) keep running in tmux when Pulse quits or crashes, and come back as tabs. Closing a tab ends its shell."),
+                  icon: "infinity",
+                  control: toggle("terminalKeepRunning")),
             .card(title: String(localized: "Shell"), detail: String(localized: "For new terminal tabs."), icon: "square-terminal",
                   control: .choice(options: shells, get: { d.string(forKey: "terminalShell") ?? "" }, set: { d.set($0, forKey: "terminalShell") })),
             .section(String(localized: "Agents")),
