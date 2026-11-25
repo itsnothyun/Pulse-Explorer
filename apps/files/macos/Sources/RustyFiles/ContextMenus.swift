@@ -98,7 +98,16 @@ enum MenuActions {
         NSPasteboard.general.setString(urls.map(\.path).joined(separator: "\n"), forType: .string)
     }
 
+    /// "Open in Terminal": Pulse's own terminal, a new tab at `dir` in the window in front (Apple's Terminal when no window
+    /// is open).
+    @MainActor
     static func openInTerminal(_ dir: URL) {
+        if let c = AppDelegate.shared.frontController { return c.openTerminal(at: dir) }
+        openInTerminalApp(dir)
+    }
+
+    /// "Open in Terminal app": Apple's Terminal at `dir`.
+    static func openInTerminalApp(_ dir: URL) {
         guard let terminal = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Terminal") else { return }
         NSWorkspace.shared.open([dir], withApplicationAt: terminal, configuration: NSWorkspace.OpenConfiguration())
     }

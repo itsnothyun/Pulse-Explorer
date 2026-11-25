@@ -67,6 +67,7 @@ square-arrow-out-up-right
 square-chevron-right
 square-plus
 square-terminal
+external-link
 sun-moon
 tag
 text-cursor-input
