@@ -100,6 +100,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         NSApp.activate()
+        // terminals still running from before (Pulse quit or crashed): each comes back as a tab
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in self?.adoptTerminalSessions() }
         if let path = ProcessInfo.processInfo.environment["RF_SNAPSHOT"] {
             snapshotAndQuit(to: path)
         }
@@ -157,6 +159,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if pages.compactMap(Sessions.url).isEmpty { openWindow(at: home) } else { openWindow(at: home).restore(pages, active: 0) }
         case .home:
             openWindow(at: home)
+        }
+    }
+
+    /// Pulse's tmux sessions no tab shows (TerminalSessions): opened as terminal tabs in the window in front, in the folder
+    /// each was in. Claude Code and the other agents in them are where they were.
+    private func adoptTerminalSessions() {
+        guard TerminalSessions.enabled else { return }
+        let shown = Set(controllers.flatMap(\.terminalIDs))
+        Task.detached(priority: .utility) {
+            let r = TerminalSessions.run(["list-sessions", "-F", "#{session_name}\t#{session_attached}\t#{pane_current_path}"])
+            guard r.status == 0 else { return }
+            let found: [(name: String, dir: String)] = r.output.split(separator: "\n").compactMap { line in
+                let f = line.split(separator: "\t", maxSplits: 2).map(String.init)
+                // (one attached elsewhere is someone else's view of it)
+                guard f.count == 3, f[1] == "0", !shown.contains(f[0]) else { return nil }
+                return (f[0], f[2])
+            }
+            guard !found.isEmpty else { return }
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                let home = BrowserTab.homeURL
+                let wc = self.frontController ?? self.controllers.first ?? self.openWindow(at: home)
+                // (the first in front: what was running is what the user comes back for)
+                for (i, s) in found.enumerated() {
+                    wc.openTab(TerminalAddress.url(in: URL(fileURLWithPath: s.dir), id: s.name), activate: i == 0)
+                }
+            }
         }
     }
 

@@ -46,9 +46,17 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     private(set) var shellTitle: String?
     private(set) var activity = ProcessInspect.Activity(program: nil, directory: nil)
 
-    init(directory: URL) {
+    /// The tmux session the shell runs in (TerminalSessions): the tab's id for its first pane, so the tab finds it again.
+    let session: String
+    /// The shell inside tmux (what runs in front is read from it, not from the tmux client in front of Pulse's own terminal).
+    private var inner: pid_t?
+    /// The pane attached to a session that was already running (Pulse came back after a quit or a crash).
+    private(set) var reattached = false
+
+    init(directory: URL, session: String = UUID().uuidString) {
         view = PulseTerminalView(frame: NSRect(x: 0, y: 0, width: 600, height: 400))
         self.directory = directory
+        self.session = session
         super.init()
         view.processDelegate = self
         view.directory = { [weak self] in self?.activity.directory.map { URL(fileURLWithPath: $0) } ?? self?.directory }
@@ -73,14 +81,20 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         let cols = max(Int(view.bounds.width / max(advance, 1)) - 1, 20)
         let rows = Int(view.bounds.height / max(lineHeight, 1))
         let dark = self.dark
+        let session = self.session, keep = TerminalSessions.enabled
         Task.detached(priority: .userInitiated) {
+            // its shell still running (Pulse quit or crashed and came back): attached again, the screen is tmux's to draw
+            let running = keep && TerminalSessions.exists(session)
             var info = TerminalWelcomeInfo.gather(dir, dark: dark)
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 let prompt = self.boxPrompt
                 info.tryBox = !prompt
                 self.suggestion = TerminalWelcome.suggestion(info)
-                if let saved = self.restore {
+                if running {
+                    self.reattached = true
+                    self.restore = nil
+                } else if let saved = self.restore {
                     // a tab that comes back: what it showed, then a quiet line, then the new shell
                     self.view.feed(byteArray: [UInt8](ScrollbackRing.replay(saved))[...])
                     self.view.feed(text: "\r\n\u{1B}[38;2;124;124;121m── restored · \(DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .short)) ──\u{1B}[0m\r\n")
@@ -116,9 +130,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
             MainActor.assumeIsolated {
                 guard let self, i < frames.count else { return t.invalidate() }
                 // something already runs (an agent cleared the screen for itself): the art is not drawn over it
-                if let p = self.view.process, p.running, let fg = ProcessInspect.foreground(ofTerminal: p.childfd), fg != p.shellPid {
-                    return t.invalidate()
-                }
+                if self.programInFront { return t.invalidate() }
                 self.view.feed(text: frames[i])
                 i += 1
             }
@@ -178,15 +190,47 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
             }
         }
         let cwd = FileManager.default.fileExists(atPath: dir.path) ? dir.path : NSHomeDirectory()
+        // in its own tmux session (TerminalSessions): the shell, and an agent in it, outlive Pulse
+        if TerminalSessions.enabled, let tmux = TerminalSessions.tmux,
+            let args = TerminalSessions.arguments(name: session, dir: cwd, shell: shell, env: env)
+        {
+            view.startProcess(executable: tmux, args: Array(args), environment: env.map { "\($0.key)=\($0.value)" },
+                              execName: "tmux", currentDirectory: cwd)
+            findInner()
+            return
+        }
         view.startProcess(executable: shell, args: ["-l"], environment: env.map { "\($0.key)=\($0.value)" },
                           execName: "-" + (shell as NSString).lastPathComponent, currentDirectory: cwd)
+    }
+
+    /// The shell inside the tmux session and its terminal, once tmux has made them (a few tries, 0.1 s apart).
+    private func findInner(tries: Int = 30) {
+        let session = self.session
+        Task.detached(priority: .utility) {
+            let found = TerminalSessions.pane(session)
+            await MainActor.run { [weak self] in
+                guard let self, self.inner == nil else { return }
+                if let found {
+                    self.inner = found.pid
+                } else if tries > 0 {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in self?.findInner(tries: tries - 1) }
+                }
+            }
+        }
+    }
+
+    /// Something other than the shell is in front (an agent, a command).
+    var programInFront: Bool {
+        if let inner { return ProcessInspect.terminalForeground(of: inner).map { $0 != inner } ?? false }
+        guard let p = view.process, p.running, let fg = ProcessInspect.foreground(ofTerminal: p.childfd) else { return false }
+        return fg != p.shellPid
     }
 
     /// Reads what runs in front and where the shell is (polled by the page while it shows).
     @discardableResult
     func refresh() -> Bool {
         guard started, let p = view.process, p.running else { return false }
-        let a = ProcessInspect.activity(shell: p.shellPid, terminal: p.childfd)
+        let a = inner.map { ProcessInspect.activity(shell: $0) } ?? ProcessInspect.activity(shell: p.shellPid, terminal: p.childfd)
         let changed = a != activity
         activity = a
         return changed
@@ -194,9 +238,13 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
 
     var title: String { shellTitle.flatMap { $0.isEmpty ? nil : $0 } ?? ProcessInspect.title(activity) }
 
-    func terminate() {
+    /// Ends the pane. `endSession`: its shell goes too (the pane or its tab was closed); otherwise the tmux session keeps
+    /// running for the next start (Pulse quitting).
+    func terminate(endSession: Bool = true) {
         animation?.invalidate()
+        if endSession, TerminalSessions.enabled { TerminalSessions.end(session) }
         view.process?.terminate()
+        inner = nil
     }
 
     // MARK: SwiftTerm
@@ -306,7 +354,8 @@ final class TerminalPage {
     // MARK: panes
 
     private func makePane(in dir: URL) -> TerminalPane {
-        let p = TerminalPane(directory: dir)
+        // the first pane's session is named after the tab, which comes back with the same id
+        let p = TerminalPane(directory: dir, session: panes.isEmpty ? id : UUID().uuidString)
         if let look { p.apply(dark: look.dark, text: look.text) }
         p.onExit = { [weak self] pane in self?.close(pane) }
         p.view.onOpenFolder = { url in AppDelegate.shared.frontController?.openTab(url, activate: true) }
@@ -432,12 +481,13 @@ final class TerminalPage {
         }
     }
 
-    func terminateAll() {
+    /// `endSessions`: false while Pulse quits (the shells keep running in tmux and come back with it).
+    func terminateAll(endSessions: Bool = true) {
         timer?.invalidate()
         TerminalRegistry.shared.remove(self)
         for p in panes {
             p.onExit = nil
-            p.terminate()
+            p.terminate(endSession: endSessions)
         }
         panes = []
     }

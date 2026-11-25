@@ -376,6 +376,11 @@ private final class TerminalIOPipelineWorker: @unchecked Sendable {
         }
         gatherThread.name = "swiftterm-io-gather"
         parseThread.name = ProfilingOwner.parseThreadName
+        // Pulse Explorer change (VENDORED.md): 8 MB stacks, as the main thread has. A secondary thread gets 512 KB; the
+        // parse path uses most of it, and the Swift runtime looking a type up on top of that (the host's output tap)
+        // overflowed it now and then (EXC_BAD_ACCESS "stack guard region" on swiftterm-io-reader).
+        gatherThread.stackSize = 8 << 20
+        parseThread.stackSize = 8 << 20
 #if canImport(Darwin)
         gatherThread.qualityOfService = .userInitiated
         parseThread.qualityOfService = .userInitiated

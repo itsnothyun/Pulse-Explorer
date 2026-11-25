@@ -389,6 +389,36 @@ final class ShelfTests: TempDirTestCase {
 // MARK: - terminal process inspection
 
 final class ProcessInspectTests: TempDirTestCase {
+    /// A shell in a pane of a tmux-like setup: the program in front is read from the kernel (no terminal descriptor).
+    func testForegroundFromTheKernel() throws {
+        // a shell on a terminal of its own, running a child in front: script(1) gives it one
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/script")
+        p.arguments = ["-q", "/dev/null", "/bin/sh", "-c", "sleep 3"]
+        p.standardInput = Pipe()
+        p.standardOutput = Pipe()
+        try p.run()
+        defer { p.terminate() }
+        var fg: pid_t?
+        for _ in 0..<40 where fg == nil {
+            usleep(50_000)
+            // script's child is the shell, session leader of the new terminal
+            let kids = ProcessInspectTests.children(of: p.processIdentifier)
+            if let sh = kids.first { fg = ProcessInspect.terminalForeground(of: sh) }
+        }
+        let shown = try XCTUnwrap(fg, "no foreground group read")
+        XCTAssertTrue(["sleep", "sh"].contains(ProcessInspect.name(of: shown) ?? ""), ProcessInspect.name(of: shown) ?? "nil")
+        XCTAssertNil(ProcessInspect.terminalForeground(of: -1))
+    }
+
+    static func children(of pid: pid_t) -> [pid_t] {
+        var count = proc_listchildpids(pid, nil, 0)
+        guard count > 0 else { return [] }
+        var kids = [pid_t](repeating: 0, count: Int(count))
+        count = proc_listchildpids(pid, &kids, Int32(kids.count * MemoryLayout<pid_t>.size))
+        return Array(kids.prefix(Int(max(count, 0))))
+    }
+
     func testOwnProcess() {
         let me = getpid()
         XCTAssertEqual(ProcessInspect.cwd(of: me).map { URL(fileURLWithPath: $0).standardizedFileURL.path },

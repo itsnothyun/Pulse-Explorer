@@ -14,6 +14,8 @@ final class BrowserTab {
     var selection: [String] = []
     var scrollY: CGFloat?
     var loadID = 0
+    /// Its folder changed while another tab was in front: listed again when it comes back.
+    var stale = false
 
     init(url: URL) { self.url = url.isFileURL ? url.standardizedFileURL : url }
 
@@ -110,7 +112,9 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     private var tabs: [BrowserTab] = []
     private var active = 0
     private var tab: BrowserTab { tabs[active] }
-    private var watcher: DirectoryWatcher?
+    /// Every folder tab's folder, watched: the tab in front lists again when its folder changes (a file added, removed,
+    /// renamed, saved or grown), the others when they come back to the front.
+    private lazy var watcher = FolderWatcher { [weak self] changed in self?.foldersChanged(changed) }
 
     private var sidebarWidth: CGFloat = {
         let w = UserDefaults.standard.double(forKey: "sidebarWidth")
@@ -207,7 +211,9 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     func windowWillReturnUndoManager(_ window: NSWindow) -> UndoManager? { FileUndo.shared.manager }
 
     func windowWillClose(_ notification: Notification) {
-        tabs.forEach { $0.term?.saveHistory(); $0.term?.terminateAll() }
+        // the shells keep running in their tmux sessions (TerminalSessions): closing the window, or quitting with it, is not
+        // closing the tabs; they come back at the next start
+        tabs.forEach { $0.term?.saveHistory(); $0.term?.terminateAll(endSessions: false) }
         onClose?(self)
     }
 
@@ -357,6 +363,11 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         navBar.omnibar.end()
         showTab()
         refreshTabs()
+        // changed while it was behind another tab
+        if tab.stale {
+            tab.stale = false
+            reload()
+        }
     }
 
     /// What the card showed last (a tab, a page or a folder), so a change of it cross-fades and a refresh does not.
@@ -717,7 +728,9 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
         for t in tabs where t.url.path == path || t.url.path.hasPrefix(path + "/") {
             if t === tab { goHome(nil) } else { t.url = FileManager.default.homeDirectoryForCurrentUser }
         }
-        watcher = nil
+        // (nothing may keep the disk open: the tabs on it went elsewhere, the watcher follows them)
+        watcher.invalidate()
+        watch()
         Task.detached(priority: .userInitiated) {
             let result = Result { try NSWorkspace.shared.unmountAndEjectDevice(at: volume) }
             if case .failure(let e) = result {
@@ -752,7 +765,13 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     }
 
     private func watch() {
-        watcher = tab.isPage || !tab.url.isFileURL ? nil : DirectoryWatcher(url: tab.url) { [weak self] in self?.reload() }
+        watcher.watch(Set(tabs.filter { !$0.isPage && $0.url.isFileURL && $0.archive == nil }.map(\.url.path)))
+    }
+
+    private func foldersChanged(_ changed: Set<String>) {
+        for t in tabs where !t.isPage && t.url.isFileURL && changed.contains(FolderWatcher.key(t.url.path)) {
+            if t === tab { reload() } else { t.stale = true }
+        }
     }
 
     private static func describe(_ error: Error, at url: URL) -> String {
@@ -1061,6 +1080,9 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
 
     /// Every terminal's output kept for next time (Pulse quitting).
     func saveTerminalHistories() { tabs.forEach { $0.term?.saveHistory() } }
+
+    /// The terminal tabs' ids (each is its first pane's tmux session).
+    var terminalIDs: [String] { tabs.compactMap { $0.isTerminal ? TerminalAddress.id(of: $0.url) : nil } }
 
     /// Brings `page`'s tab to the front (the Agents panel, a notification).
     func showTerminal(_ page: TerminalPage) {
