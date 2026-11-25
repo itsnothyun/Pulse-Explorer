@@ -1272,6 +1272,7 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
         if singleDir, let u = urls.first {
             b.separator()
             b.add(String(localized: "Open in Terminal"), "square-terminal") { MenuActions.openInTerminal(u) }
+            b.add(String(localized: "Open in Terminal app"), "external-link") { MenuActions.openInTerminalApp(u) }
             if Editors.offered(for: u) { b.add(String(localized: "Open in \(Editors.name)"), "code") { Editors.open([u]) } }
             // Advanced › Show “Flatten folder”
             if AppSettings.flattenOption {
@@ -1406,6 +1407,7 @@ final class FileListController: NSObject, NSTableViewDataSource, NSTableViewDele
         if let dir = url, dir.isFileURL {
             b.separator()
             b.add(String(localized: "Open in Terminal"), "square-terminal") { MenuActions.openInTerminal(dir) }
+            b.add(String(localized: "Open in Terminal app"), "external-link") { MenuActions.openInTerminalApp(dir) }
             // Developer tools › “Open in editor”
             if Editors.offered(for: dir) { b.add(String(localized: "Open in \(Editors.name)"), "code") { Editors.open([dir]) } }
         }
