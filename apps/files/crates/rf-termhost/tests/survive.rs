@@ -51,16 +51,34 @@ fn host_name() -> String {
     std::env::var("TERMHOST_TEST_NAME").unwrap_or_default()
 }
 
-/// Runs one viewer step in a process of its own; it must succeed.
+/// Runs one viewer step in a process of its own; it must succeed, within a minute (a step that hangs fails the test
+/// instead of the whole job). Its output goes to a file: a pipe would be held open by anything the step leaves running.
 fn step(name: &str, which: &str) {
-    let out = Command::new(std::env::current_exe().unwrap())
+    let log = std::env::temp_dir().join(format!("{name}-{which}.log"));
+    let file = std::fs::File::create(&log).unwrap();
+    let mut child = Command::new(std::env::current_exe().unwrap())
         .args([which, "--exact", "--ignored", "--nocapture"])
         .env("TERMHOST_TEST_NAME", name)
         .env("PULSE_TERMHOST_IDLE_SECS", "2")
-        .output()
+        .stdout(file.try_clone().unwrap())
+        .stderr(file)
+        .spawn()
         .unwrap();
-    let text = String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
-    assert!(out.status.success() && text.contains("1 passed"), "step {which} failed:\n{text}");
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let status = loop {
+        if let Some(s) = child.try_wait().unwrap() {
+            break Some(s);
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    let text = std::fs::read_to_string(&log).unwrap_or_default();
+    let _ = std::fs::remove_file(&log);
+    assert!(status.is_some(), "step {which} did not finish in a minute:\n{text}");
+    assert!(status.unwrap().success() && text.contains("1 passed"), "step {which} failed:\n{text}");
 }
 
 #[test]
@@ -117,6 +135,8 @@ fn viewer_comes_back_and_closes() {
 fn heavy_output_from_several_terminals_arrives_whole() {
     let exe = Path::new(env!("CARGO_BIN_EXE_pulse-termhost"));
     let name = format!("pulse-termhost-stress-{}", std::process::id());
+    // SAFETY: set before the host starts (it reads it); a short idle time, so the host goes when the test is done
+    unsafe { std::env::set_var("PULSE_TERMHOST_IDLE_SECS", "2") };
     let (c, ev) = Client::connect_or_start(&name, exe).expect("host");
     let ids: Vec<String> = (0..4).map(|i| format!("t{i}")).collect();
     for id in &ids {

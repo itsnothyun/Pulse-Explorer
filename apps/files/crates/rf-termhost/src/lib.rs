@@ -423,30 +423,51 @@ impl Client {
 
 /// Starts the host as a process of its own: no console window, not in the caller's job (on Windows a crashed parent's job
 /// would otherwise take it along), its own process group elsewhere.
+///
+/// On Windows it is made with CreateProcessW and *no* handle inheritance: std's Command lets the child inherit every
+/// inheritable handle of the caller, so the long-lived host kept the caller's pipes (and anything else it had open as
+/// inheritable) open for as long as it ran; whoever waited on those pipes waited forever.
 pub fn start_detached(host_exe: &Path, name: &str) -> Result<()> {
-    let mut cmd = std::process::Command::new(host_exe);
-    cmd.arg("--serve").arg(name).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
     #[cfg(windows)]
     {
-        use std::os::windows::process::CommandExt;
-        const DETACHED_PROCESS: u32 = 0x0000_0008;
-        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
-        cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW | CREATE_BREAKAWAY_FROM_JOB);
-        if cmd.spawn().is_ok() {
-            return Ok(());
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Foundation::CloseHandle;
+        use windows_sys::Win32::System::Threading::{
+            CREATE_BREAKAWAY_FROM_JOB, CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW, CreateProcessW, DETACHED_PROCESS, PROCESS_INFORMATION,
+            STARTUPINFOW,
+        };
+        let app: Vec<u16> = host_exe.as_os_str().encode_wide().chain(Some(0)).collect();
+        let line = format!("\"{}\" --serve {}", host_exe.display(), name);
+        let base = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW;
+        // out of the caller's job when the job allows it, else inside it
+        for flags in [base | CREATE_BREAKAWAY_FROM_JOB, base] {
+            let mut cmd: Vec<u16> = std::ffi::OsStr::new(&line).encode_wide().chain(Some(0)).collect();
+            // SAFETY: zeroed is a valid STARTUPINFOW / PROCESS_INFORMATION; the strings are NUL-terminated and live across the call
+            let mut si: STARTUPINFOW = unsafe { std::mem::zeroed() };
+            si.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
+            let mut pi: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
+            let ok = unsafe {
+                CreateProcessW(app.as_ptr(), cmd.as_mut_ptr(), std::ptr::null(), std::ptr::null(), 0, flags, std::ptr::null(), std::ptr::null(), &si, &mut pi)
+            };
+            if ok != 0 {
+                unsafe {
+                    CloseHandle(pi.hProcess);
+                    CloseHandle(pi.hThread);
+                }
+                return Ok(());
+            }
         }
-        // (a job that forbids breaking away: started inside it, still detached from the console)
-        cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
+        Err(anyhow::Error::from(std::io::Error::last_os_error()).context("start the terminal host"))
     }
-    #[cfg(unix)]
+    #[cfg(not(windows))]
     {
         use std::os::unix::process::CommandExt;
+        let mut cmd = std::process::Command::new(host_exe);
+        cmd.arg("--serve").arg(name).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
         cmd.process_group(0);
+        cmd.spawn().context("start the terminal host")?;
+        Ok(())
     }
-    cmd.spawn().context("start the terminal host")?;
-    Ok(())
 }
 
 #[cfg(test)]

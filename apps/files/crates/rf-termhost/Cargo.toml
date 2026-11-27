@@ -19,3 +19,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 portable-pty = "0.9"
 interprocess = "2.4"
+
+# the host is started without inheriting the caller's handles (CreateProcessW, bInheritHandles = FALSE)
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Threading"] }
