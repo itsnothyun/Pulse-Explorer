@@ -11,13 +11,20 @@ use std::time::{Duration, Instant};
 
 use rf_termhost::{Client, Event, Events, Open};
 
-fn wait_for(c: &Events, what: &str, timeout: Duration, mut done: impl FnMut(&Event) -> bool) -> Vec<Event> {
+/// Waits for an event `done` accepts, answering the terminal's questions as a terminal does: ConPTY asks where the cursor
+/// is (`ESC [6n`) when a shell starts, and waits for the answer (xterm.js gives it in the app).
+fn wait_for(c: &Client, ev: &Events, what: &str, timeout: Duration, mut done: impl FnMut(&Event) -> bool) -> Vec<Event> {
     let deadline = Instant::now() + timeout;
     let mut seen = Vec::new();
     while Instant::now() < deadline {
-        if let Ok(ev) = c.recv_timeout(Duration::from_millis(100)) {
-            let stop = done(&ev);
-            seen.push(ev);
+        if let Ok(e) = ev.recv_timeout(Duration::from_millis(100)) {
+            if let Event::Output { id, data } = &e {
+                for _ in 0..data.windows(4).filter(|w| *w == b"\x1b[6n").count() {
+                    let _ = c.input(id, b"\x1b[1;1R");
+                }
+            }
+            let stop = done(&e);
+            seen.push(e);
             if stop {
                 return seen;
             }
@@ -99,9 +106,9 @@ fn viewer_starts_and_vanishes() {
     let exe = Path::new(env!("CARGO_BIN_EXE_pulse-termhost"));
     let (c, ev) = Client::connect_or_start(&host_name(), exe).expect("host");
     c.open(&open()).unwrap();
-    wait_for(&ev, "opened", Duration::from_secs(5), |e| matches!(e, Event::Opened { attached: false, .. }));
+    wait_for(&c, &ev, "opened", Duration::from_secs(5), |e| matches!(e, Event::Opened { attached: false, .. }));
     c.input("tab-1", &say("FIRST")).unwrap();
-    wait_for(&ev, "first output", Duration::from_secs(5), |e| matches!(e, Event::Output { data, .. } if String::from_utf8_lossy(data).contains("FIRST_42")));
+    wait_for(&c, &ev, "first output", Duration::from_secs(5), |e| matches!(e, Event::Output { data, .. } if String::from_utf8_lossy(data).contains("FIRST_42")));
     // then this process exits, without closing anything: as the file manager does when it crashes
 }
 
@@ -110,22 +117,22 @@ fn viewer_starts_and_vanishes() {
 fn viewer_comes_back_and_closes() {
     let (c, ev) = Client::connect(&host_name()).expect("the host outlived the first viewer");
     c.list().unwrap();
-    let seen = wait_for(&ev, "sessions", Duration::from_secs(5), |e| matches!(e, Event::Sessions(_)));
+    let seen = wait_for(&c, &ev, "sessions", Duration::from_secs(5), |e| matches!(e, Event::Sessions(_)));
     match seen.last() {
         Some(Event::Sessions(list)) => assert!(list.iter().any(|s| s.id == "tab-1"), "the session is still running: {list:?}"),
         other => panic!("{other:?}"),
     }
     c.open(&open()).unwrap();
-    let seen = wait_for(&ev, "attached", Duration::from_secs(5), |e| matches!(e, Event::Output { .. }));
+    let seen = wait_for(&c, &ev, "attached", Duration::from_secs(5), |e| matches!(e, Event::Output { .. }));
     assert!(seen.iter().any(|e| matches!(e, Event::Opened { attached: true, .. })), "attached to the running session: {seen:?}");
     assert!(output_of(&seen, "tab-1").contains("FIRST_42"), "the kept output comes back");
     c.input("tab-1", &say("SECOND")).unwrap();
-    wait_for(&ev, "second output", Duration::from_secs(5), |e| matches!(e, Event::Output { data, .. } if String::from_utf8_lossy(data).contains("SECOND_42")));
+    wait_for(&c, &ev, "second output", Duration::from_secs(5), |e| matches!(e, Event::Output { data, .. } if String::from_utf8_lossy(data).contains("SECOND_42")));
     // closing the tab ends the session
     c.close("tab-1").unwrap();
-    wait_for(&ev, "exit", Duration::from_secs(5), |e| matches!(e, Event::Exit { id } if id == "tab-1"));
+    wait_for(&c, &ev, "exit", Duration::from_secs(5), |e| matches!(e, Event::Exit { id } if id == "tab-1"));
     c.list().unwrap();
-    let seen = wait_for(&ev, "empty list", Duration::from_secs(5), |e| matches!(e, Event::Sessions(_)));
+    let seen = wait_for(&c, &ev, "empty list", Duration::from_secs(5), |e| matches!(e, Event::Sessions(_)));
     assert!(matches!(seen.last(), Some(Event::Sessions(l)) if l.is_empty()), "{seen:?}");
 }
 
