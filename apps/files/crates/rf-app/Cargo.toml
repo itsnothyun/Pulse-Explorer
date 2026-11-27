@@ -33,6 +33,8 @@ gpui-kit.workspace = true
 webview2-com = "0.39"
 # terminal tabs: PowerShell in a ConPTY behind xterm.js (terminal.rs)
 portable-pty = "0.9"
+# terminals kept running after the app quits or crashes (terminal.rs: pulse-termhost.exe)
+rf-termhost.workspace = true
 anyhow.workspace = true
 log.workspace = true
 env_logger = "0.11"

@@ -1,0 +1,25 @@
+[package]
+name = "rf-termhost"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Pulse Explorer's terminal session host: keeps terminal shells (and the coding agents in them) running when the file manager quits or crashes, and hands them back when it returns"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "pulse-termhost"
+path = "src/bin/pulse-termhost.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+portable-pty = "0.9"
+interprocess = "2.4"
+
+# the host is started without inheriting the caller's handles (CreateProcessW, bInheritHandles = FALSE)
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Threading"] }

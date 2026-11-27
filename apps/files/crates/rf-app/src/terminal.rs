@@ -43,6 +43,20 @@ pub fn url_for(dir: &Path) -> String {
     format!("https://{HOST}/index.html?dir={}&s={key}", encode(&dir.to_string_lossy()))
 }
 
+/// The address of terminal tab `key` in `dir` (a terminal the host kept, opened again as a tab).
+pub fn url_for_key(dir: &Path, key: &str) -> String {
+    format!("https://{HOST}/index.html?dir={}&s={key}", encode(&dir.to_string_lossy()))
+}
+
+/// The key in a terminal tab's address (its hosted terminal's name).
+pub fn key_of(url: &str) -> Option<String> {
+    if !is_terminal(url) {
+        return None;
+    }
+    let q = url.split_once('?')?.1;
+    q.split('&').find_map(|kv| kv.strip_prefix("s=")).map(str::to_string).filter(|k| !k.is_empty())
+}
+
 fn rand_bits() -> u16 {
     use std::hash::{BuildHasher, Hasher};
     let mut h = std::collections::hash_map::RandomState::new().build_hasher();
@@ -130,6 +144,11 @@ pub fn page_dir() -> Option<PathBuf> {
 
 // ---------------------------------------------------------------------------------------------------------------
 // sessions
+//
+// A terminal runs in one of two places. Hosted (the usual): in `pulse-termhost.exe` (rf-termhost), a process of its own that
+// keeps the shell running when this app quits or crashes; the tab that comes back attaches to it again by its key (the `s` in
+// its address), and terminals no tab shows are opened as tabs at the next start (`orphans`). Local: in a ConPTY of this
+// process, as before, when the host cannot be started (its file missing); it ends with the app.
 
 enum Out {
     Bytes(Vec<u8>),
@@ -146,16 +165,71 @@ struct Shared {
     own_title: Option<String>,
     /// The welcome card has come through (its pulse line is drawn in then).
     card_seen: bool,
+    /// Attached to a terminal that was already running: no card of ours to animate.
+    reattached: bool,
     /// The tail of the output, kept on disk for the next run (`dirty`: not written yet).
     ring: Option<rf_pulse::agents::Ring>,
     dirty: bool,
 }
 
+/// What reading the output keeps from one chunk to the next.
+#[derive(Default)]
+struct Scan {
+    bells: BellScanner,
+    titles: TitleScanner,
+    tail: Vec<u8>,
+}
+
+/// One chunk of a shell's output: the agent status (titles, the bell), the card's arrival, the kept tail, and the queue for
+/// the page.
+fn take_output(sh: &mut Shared, scan: &mut Scan, chunk: &[u8]) {
+    let rang = scan.bells.scan(chunk);
+    let said = scan.titles.scan(chunk);
+    sh.last_output = Some(Instant::now());
+    if let Some(r) = sh.ring.as_mut() {
+        r.push(chunk);
+        sh.dirty = true;
+    }
+    sh.rang |= rang;
+    for t in said {
+        match rf_pulse::term::title(&t) {
+            Title::Idle => {
+                sh.program = None;
+                sh.own_title = None;
+            }
+            Title::Run(p) => {
+                sh.program = Some(p);
+                sh.own_title = None;
+            }
+            // (PowerShell names the window itself while it starts: only a program's own name counts)
+            Title::Own(t) if sh.program.is_some() => sh.own_title = Some(t),
+            Title::Own(_) => {}
+        }
+    }
+    if !sh.card_seen {
+        scan.tail.extend_from_slice(chunk);
+        if scan.tail.windows(3).any(|w| w == "█".as_bytes()) {
+            sh.card_seen = true;
+        }
+        if scan.tail.len() > 4096 {
+            let cut = scan.tail.len() - 16;
+            scan.tail.drain(..cut);
+        }
+    }
+    match sh.queue.last_mut() {
+        Some(Out::Bytes(b)) if b.len() < 256 * 1024 => b.extend_from_slice(chunk),
+        _ => sh.queue.push(Out::Bytes(chunk.to_vec())),
+    }
+}
+
+enum Backend {
+    Local { writer: Box<dyn Write + Send>, master: Box<dyn MasterPty + Send>, child: Box<dyn Child + Send + Sync> },
+    Hosted { key: String },
+}
+
 struct Session {
     owner: isize,
-    writer: Box<dyn Write + Send>,
-    master: Box<dyn MasterPty + Send>,
-    child: Box<dyn Child + Send + Sync>,
+    backend: Backend,
     shared: Arc<Mutex<Shared>>,
     alive: Arc<AtomicBool>,
     folder: String,
@@ -167,7 +241,17 @@ struct Session {
 impl Drop for Session {
     fn drop(&mut self) {
         self.alive.store(false, Ordering::Relaxed);
-        let _ = self.child.kill();
+        match &mut self.backend {
+            // (a local shell goes with its tab; a hosted one stays with the host until its tab is closed: `end`)
+            Backend::Local { child, .. } => {
+                let _ = child.kill();
+            }
+            Backend::Hosted { key } => {
+                if let Some(l) = LINK.lock().unwrap().as_ref() {
+                    l.routes.lock().unwrap().remove(key);
+                }
+            }
+        }
     }
 }
 
@@ -176,6 +260,168 @@ thread_local! {
     /// A page's window → its tab (for [`WAKE`]).
     static HOSTS: RefCell<HashMap<isize, EntityId>> = RefCell::new(HashMap::new());
 }
+
+// ---------------------------------------------------------------------------------------------------------------
+// the host (rf-termhost)
+
+/// Where a hosted terminal's output goes: its tab's page.
+struct Route {
+    shared: Arc<Mutex<Shared>>,
+    scan: Mutex<Scan>,
+    host: isize,
+    alive: Arc<AtomicBool>,
+    /// The kept output of an earlier run, shown first when the host starts this terminal afresh (not when it attaches).
+    history: Option<PathBuf>,
+    rows: u16,
+    /// The welcome card's file, which the start-up script removes; left over when the terminal was attached instead.
+    card: Option<PathBuf>,
+}
+
+struct Link {
+    client: rf_termhost::Client,
+    routes: Mutex<HashMap<String, Arc<Route>>>,
+    /// Someone waiting for the answer to a `list`.
+    listing: Mutex<Option<std::sync::mpsc::Sender<Vec<rf_termhost::SessionInfo>>>>,
+}
+
+static LINK: Mutex<Option<Arc<Link>>> = Mutex::new(None);
+
+fn host_exe() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?.parent()?.join("pulse-termhost.exe");
+    exe.is_file().then_some(exe)
+}
+
+/// The connection to the host: made (the host started) when none is open; None when the host cannot be had (its file
+/// missing), and terminals then run here.
+fn link() -> Option<Arc<Link>> {
+    link_with(true)
+}
+
+/// `start`: start the host when none runs (a terminal opening); else only connect to one that runs (asking what it keeps).
+fn link_with(start: bool) -> Option<Arc<Link>> {
+    let mut slot = LINK.lock().unwrap();
+    if let Some(l) = slot.as_ref().filter(|l| l.client.is_alive()) {
+        return Some(l.clone());
+    }
+    let exe = host_exe()?;
+    let name = rf_termhost::default_name();
+    let made = if start { rf_termhost::Client::connect_or_start(&name, &exe) } else { rf_termhost::Client::connect(&name) };
+    let (client, events) = match made {
+        Ok(c) => c,
+        Err(e) => {
+            if start {
+                log::warn!("terminal host: {e:#}");
+            }
+            return None;
+        }
+    };
+    let link = Arc::new(Link { client, routes: Mutex::new(HashMap::new()), listing: Mutex::new(None) });
+    let l2 = link.clone();
+    let _ = std::thread::Builder::new().name("terminal-host-events".into()).spawn(move || dispatch(l2, events));
+    *slot = Some(link.clone());
+    Some(link)
+}
+
+/// The host's events, handed to the tabs' pages (off the UI thread; the page's window is woken for each).
+fn dispatch(link: Arc<Link>, events: rf_termhost::Events) {
+    use rf_termhost::Event;
+    for ev in events {
+        match ev {
+            Event::Output { id, data } => {
+                let Some(r) = link.routes.lock().unwrap().get(&id).cloned() else { continue };
+                if let (Ok(mut sh), Ok(mut scan)) = (r.shared.lock(), r.scan.lock()) {
+                    take_output(&mut sh, &mut scan, &data);
+                }
+                wake(r.host);
+            }
+            Event::Opened { id, attached } => {
+                let Some(r) = link.routes.lock().unwrap().get(&id).cloned() else { continue };
+                if attached {
+                    // the host replays what it kept; the card of the start that did not happen is not needed
+                    if let Some(c) = &r.card {
+                        let _ = std::fs::remove_file(c);
+                    }
+                    if let Ok(mut sh) = r.shared.lock() {
+                        sh.reattached = true;
+                    }
+                } else if let Some(b) = r.history.as_ref().and_then(|f| restored(f, r.rows)) {
+                    // a fresh start: the last run's output first (pushed up into the scrollback), then the shell
+                    if let Ok(mut sh) = r.shared.lock() {
+                        sh.queue.insert(0, Out::Bytes(b));
+                    }
+                }
+                wake(r.host);
+            }
+            Event::Exit { id } => {
+                let Some(r) = link.routes.lock().unwrap().remove(&id) else { continue };
+                if let Ok(mut sh) = r.shared.lock() {
+                    sh.queue.push(Out::Exit);
+                }
+                r.alive.store(false, Ordering::Relaxed);
+                wake(r.host);
+            }
+            Event::Sessions(list) => {
+                if let Some(tx) = link.listing.lock().unwrap().take() {
+                    let _ = tx.send(list);
+                }
+            }
+            Event::Disconnected => break,
+        }
+    }
+    // the host is gone (it should not be): the tabs show their shells ended; the next terminal starts a host again
+    for (_, r) in link.routes.lock().unwrap().drain() {
+        if let Ok(mut sh) = r.shared.lock() {
+            sh.queue.push(Out::Exit);
+        }
+        r.alive.store(false, Ordering::Relaxed);
+        wake(r.host);
+    }
+    let mut slot = LINK.lock().unwrap();
+    if slot.as_ref().is_some_and(|l| Arc::ptr_eq(l, &link)) {
+        *slot = None;
+    }
+}
+
+/// The kept output of an earlier run as the page shows it: then a quiet line, pushed up into the scrollback (the shell clears
+/// the screen as it starts), the cursor back on the top line (the card's pulse line is drawn at fixed rows).
+fn restored(file: &Path, rows: u16) -> Option<Vec<u8>> {
+    let saved = std::fs::read(file).ok().filter(|b| !b.is_empty())?;
+    let mut b = rf_pulse::agents::Ring::replay(&saved);
+    b.extend_from_slice(b"\r\n\x1b[2m\xe2\x94\x80\xe2\x94\x80 restored from the last session \xe2\x94\x80\xe2\x94\x80\x1b[0m");
+    b.extend(std::iter::repeat_n(b"\r\n".as_slice(), rows as usize).flatten());
+    b.extend_from_slice(b"\x1b[H");
+    Some(b)
+}
+
+/// The terminals the host keeps that no tab in `shown` (their keys) shows: (key, folder), to open as tabs after a restart.
+/// Blocks for the host's answer (a second at most): call it off the UI thread.
+pub fn orphans(shown: &[String]) -> Vec<(String, PathBuf)> {
+    // (no host running: nothing kept, and none is started just to ask; the app's own connection otherwise: the host takes
+    // one viewer, a second connection would push the first one out)
+    let Some(link) = link_with(false) else { return vec![] };
+    let (tx, rx) = std::sync::mpsc::channel();
+    *link.listing.lock().unwrap() = Some(tx);
+    if link.client.list().is_err() {
+        return vec![];
+    }
+    let list = rx.recv_timeout(std::time::Duration::from_secs(1)).unwrap_or_default();
+    list.into_iter().filter(|s| !shown.contains(&s.id)).map(|s| (s.id, PathBuf::from(s.dir))).collect()
+}
+
+/// The tab was closed by the user: its terminal ends (a hosted one is told to the host; a window closing, the app quitting
+/// or crashing leave hosted terminals running).
+pub fn end(id: EntityId) {
+    let key = SESSIONS.with_borrow(|s| match s.get(&id).map(|s| &s.backend) {
+        Some(Backend::Hosted { key }) => Some(key.clone()),
+        _ => None,
+    });
+    if let (Some(key), Some(l)) = (key, LINK.lock().unwrap().clone()) {
+        let _ = l.client.close(&key);
+    }
+    close(id);
+}
+
+// ---------------------------------------------------------------------------------------------------------------
 
 /// Something the page asked of the app.
 #[derive(Debug, Clone, Copy)]
@@ -194,22 +440,23 @@ pub fn on_message(id: EntityId, host: isize, owner: isize, text: &str) -> Option
             let cols = m.get("cols").and_then(|v| v.as_u64()).unwrap_or(100).clamp(20, 500) as u16;
             let rows = m.get("rows").and_then(|v| v.as_u64()).unwrap_or(30).clamp(5, 300) as u16;
             let light = m.get("light").and_then(|v| v.as_bool()).unwrap_or(false);
-            let history = m.get("key").and_then(|v| v.as_str()).and_then(history_file);
+            let key = m.get("key").and_then(|v| v.as_str()).filter(|k| history_file(k).is_some()).map(str::to_string);
+            let history = key.as_deref().and_then(history_file);
             let dir = m.get("dir").and_then(|v| v.as_str()).map(PathBuf::from).filter(|d| d.is_dir()).or_else(dirs::home_dir).unwrap_or_else(|| PathBuf::from("C:\\"));
             HOSTS.with_borrow_mut(|h| h.insert(host, id));
             // (a reload starts a new shell; the old one goes with its session)
             let old = SESSIONS.with_borrow_mut(|s| s.remove(&id));
             drop(old);
-            // last run's output first, pushed up into the scrollback (the shell clears the screen as it starts)
-            if let Some(saved) = history.as_ref().and_then(|f| std::fs::read(f).ok()).filter(|b| !b.is_empty()) {
-                let mut b = rf_pulse::agents::Ring::replay(&saved);
-                b.extend_from_slice(b"\r\n\x1b[2m\xe2\x94\x80\xe2\x94\x80 restored from the last session \xe2\x94\x80\xe2\x94\x80\x1b[0m");
-                b.extend(std::iter::repeat_n(b"\r\n".as_slice(), rows as usize).flatten());
-                // (and the card starts on the top line again: its pulse line is drawn at fixed rows)
-                b.extend_from_slice(b"\x1b[H");
-                crate::web_view::post(id, &serde_json::json!({"t": "out", "d": rf_pulse::term::base64(&b)}).to_string());
+            // hosted under the tab's key (it outlives this app), else here; a page without a key gets one for this run
+            let key = key.unwrap_or_else(|| format!("{:x}{:04x}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_micros()), rand_bits()));
+            let hosted = link();
+            if hosted.is_none() {
+                // (here, the last run's output is shown first; a hosted terminal shows it when the host starts it afresh)
+                if let Some(b) = history.as_ref().and_then(|f| restored(f, rows)) {
+                    crate::web_view::post(id, &serde_json::json!({"t": "out", "d": rf_pulse::term::base64(&b)}).to_string());
+                }
             }
-            match start(host, owner, &dir, cols, rows, light, history) {
+            match start(host, owner, &dir, cols, rows, light, history, hosted.map(|l| (l, key))) {
                 Ok(s) => {
                     SESSIONS.with_borrow_mut(|all| all.insert(id, s));
                 }
@@ -226,8 +473,17 @@ pub fn on_message(id: EntityId, host: isize, owner: isize, text: &str) -> Option
             let d = m.get("d")?.as_str()?.to_string();
             SESSIONS.with_borrow_mut(|s| {
                 if let Some(s) = s.get_mut(&id) {
-                    let _ = s.writer.write_all(d.as_bytes());
-                    let _ = s.writer.flush();
+                    match &mut s.backend {
+                        Backend::Local { writer, .. } => {
+                            let _ = writer.write_all(d.as_bytes());
+                            let _ = writer.flush();
+                        }
+                        Backend::Hosted { key } => {
+                            if let Some(l) = LINK.lock().unwrap().clone() {
+                                let _ = l.client.input(key, d.as_bytes());
+                            }
+                        }
+                    }
                     // you answered: the bell is heard
                     if let Ok(mut sh) = s.shared.lock() {
                         sh.rang = false;
@@ -241,7 +497,16 @@ pub fn on_message(id: EntityId, host: isize, owner: isize, text: &str) -> Option
             let rows = m.get("rows")?.as_u64()?.clamp(5, 300) as u16;
             SESSIONS.with_borrow(|s| {
                 if let Some(s) = s.get(&id) {
-                    let _ = s.master.resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 });
+                    match &s.backend {
+                        Backend::Local { master, .. } => {
+                            let _ = master.resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 });
+                        }
+                        Backend::Hosted { key } => {
+                            if let Some(l) = LINK.lock().unwrap().clone() {
+                                let _ = l.client.resize(key, cols, rows);
+                            }
+                        }
+                    }
                 }
             });
             None
@@ -353,77 +618,65 @@ fn welcome(dir: &Path, light: bool) -> rf_pulse::welcome::Info {
     }
 }
 
-fn start(host: isize, owner: isize, dir: &Path, cols: u16, rows: u16, light: bool, history: Option<PathBuf>) -> anyhow::Result<Session> {
+#[allow(clippy::too_many_arguments)]
+fn start(host: isize, owner: isize, dir: &Path, cols: u16, rows: u16, light: bool, history: Option<PathBuf>, hosted: Option<(Arc<Link>, String)>) -> anyhow::Result<Session> {
     let info = welcome(dir, light);
     let card = rf_pulse::welcome::render(&info, cols as usize);
     let frames = rf_pulse::welcome::frames(&info, cols as usize, 1);
     let card_file = std::env::temp_dir().join(format!("pulse-card-{}-{}.txt", std::process::id(), host));
     std::fs::write(&card_file, card)?;
     let script = rf_pulse::term::powershell_init(Some(&card_file.to_string_lossy()), &[]);
-
-    let pair = portable_pty::native_pty_system().openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })?;
-    let mut cmd = CommandBuilder::new(shell());
-    cmd.args(["-NoLogo", "-NoExit", "-EncodedCommand", &rf_pulse::term::encoded_command(&script)]);
-    cmd.cwd(dir);
-    cmd.env("TERM_PROGRAM", "PulseExplorer");
-    cmd.env("COLORTERM", "truecolor");
-    let child = pair.slave.spawn_command(cmd)?;
-    drop(pair.slave);
-    let mut reader = pair.master.try_clone_reader()?;
-    let writer = pair.master.take_writer()?;
+    let program = shell();
+    let args = vec!["-NoLogo".to_string(), "-NoExit".into(), "-EncodedCommand".into(), rf_pulse::term::encoded_command(&script)];
+    let env = vec![("TERM_PROGRAM".to_string(), "PulseExplorer".to_string()), ("COLORTERM".into(), "truecolor".into())];
 
     let shared = Arc::new(Mutex::new(Shared { ring: history.is_some().then(|| rf_pulse::agents::Ring::new(256 * 1024)), ..Default::default() }));
     let alive = Arc::new(AtomicBool::new(true));
-    {
+    let folder = dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| dir.to_string_lossy().into_owned());
+    let frames = Some(frames).filter(|f| !f.is_empty());
+
+    let backend = if let Some((link, key)) = hosted {
+        // the host's: the route first (its answer and output may come at once), then the request
+        let route = Arc::new(Route {
+            shared: shared.clone(),
+            scan: Mutex::new(Scan::default()),
+            host,
+            alive: alive.clone(),
+            history: history.clone(),
+            rows,
+            card: Some(card_file.clone()),
+        });
+        link.routes.lock().unwrap().insert(key.clone(), route);
+        let open = rf_termhost::Open { id: key.clone(), dir: dir.to_string_lossy().into_owned(), cols, rows, program, args, env };
+        if let Err(e) = link.client.open(&open) {
+            link.routes.lock().unwrap().remove(&key);
+            return Err(e);
+        }
+        Backend::Hosted { key }
+    } else {
+        let pair = portable_pty::native_pty_system().openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })?;
+        let mut cmd = CommandBuilder::new(program);
+        cmd.args(&args);
+        cmd.cwd(dir);
+        for (k, v) in &env {
+            cmd.env(k, v);
+        }
+        let child = pair.slave.spawn_command(cmd)?;
+        drop(pair.slave);
+        let mut reader = pair.master.try_clone_reader()?;
+        let writer = pair.master.take_writer()?;
         let (shared, alive) = (shared.clone(), alive.clone());
         std::thread::Builder::new().name("terminal-read".into()).spawn(move || {
-            let (mut bells, mut titles) = (BellScanner::default(), TitleScanner::default());
-            let mut tail: Vec<u8> = Vec::new();
+            let mut scan = Scan::default();
             let mut buf = vec![0u8; 32 * 1024];
             loop {
                 let n = match reader.read(&mut buf) {
                     Ok(0) | Err(_) => break,
                     Ok(n) => n,
                 };
-                let chunk = &buf[..n];
-                let rang = bells.scan(chunk);
-                let said = titles.scan(chunk);
                 {
                     let Ok(mut sh) = shared.lock() else { break };
-                    sh.last_output = Some(Instant::now());
-                    if let Some(r) = sh.ring.as_mut() {
-                        r.push(chunk);
-                        sh.dirty = true;
-                    }
-                    sh.rang |= rang;
-                    for t in said {
-                        match rf_pulse::term::title(&t) {
-                            Title::Idle => {
-                                sh.program = None;
-                                sh.own_title = None;
-                            }
-                            Title::Run(p) => {
-                                sh.program = Some(p);
-                                sh.own_title = None;
-                            }
-                            // (PowerShell names the window itself while it starts: only a program's own name counts)
-                            Title::Own(t) if sh.program.is_some() => sh.own_title = Some(t),
-                            Title::Own(_) => {}
-                        }
-                    }
-                    if !sh.card_seen {
-                        tail.extend_from_slice(chunk);
-                        if tail.windows(3).any(|w| w == "█".as_bytes()) {
-                            sh.card_seen = true;
-                        }
-                        if tail.len() > 4096 {
-                            tail.drain(..tail.len() - 16);
-                        }
-                    }
-                    match sh.queue.last_mut() {
-                        Some(Out::Bytes(b)) if b.len() < 256 * 1024 => b.extend_from_slice(chunk),
-                        _ => sh.queue.push(Out::Bytes(chunk.to_vec())),
-                    }
+                    take_output(&mut sh, &mut scan, &buf[..n]);
                 }
                 wake(host);
             }
@@ -433,39 +686,40 @@ fn start(host: isize, owner: isize, dir: &Path, cols: u16, rows: u16, light: boo
             alive.store(false, Ordering::Relaxed);
             wake(host);
         })?;
-    }
-    {
-        // the status follows time too (an agent gone quiet is waiting): a beat while the shell lives
-        // and the kept output is written now and then (off the UI thread), once more when the shell ends
-        let (alive, shared) = (alive.clone(), shared.clone());
-        std::thread::Builder::new().name("terminal-beat".into()).spawn(move || {
-            let mut since_save = 0u32;
-            loop {
-                let live = alive.load(Ordering::Relaxed);
-                std::thread::sleep(std::time::Duration::from_millis(500));
-                wake(host);
-                since_save += 1;
-                if since_save >= 6 || !live {
-                    since_save = 0;
-                    let bytes = shared.lock().ok().and_then(|mut sh| {
-                        let dirty = std::mem::take(&mut sh.dirty);
-                        sh.ring.as_ref().filter(|_| dirty).map(|r| r.bytes().to_vec())
-                    });
-                    if let (Some(b), Some(f)) = (bytes, history.as_ref()) {
-                        if let Some(d) = f.parent() {
-                            let _ = std::fs::create_dir_all(d);
-                        }
-                        let _ = std::fs::write(f, b);
+        Backend::Local { writer, master: pair.master, child }
+    };
+    beat(host, alive.clone(), shared.clone(), history);
+    Ok(Session { owner, backend, shared, alive, folder, frames, status: Status::Idle, shown_title: String::new() })
+}
+
+/// The status follows time too (an agent gone quiet is waiting): a beat while the shell lives. And the kept output is
+/// written now and then (off the UI thread), once more when the shell ends.
+fn beat(host: isize, alive: Arc<AtomicBool>, shared: Arc<Mutex<Shared>>, history: Option<PathBuf>) {
+    let _ = std::thread::Builder::new().name("terminal-beat".into()).spawn(move || {
+        let mut since_save = 0u32;
+        loop {
+            let live = alive.load(Ordering::Relaxed);
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            wake(host);
+            since_save += 1;
+            if since_save >= 6 || !live {
+                since_save = 0;
+                let bytes = shared.lock().ok().and_then(|mut sh| {
+                    let dirty = std::mem::take(&mut sh.dirty);
+                    sh.ring.as_ref().filter(|_| dirty).map(|r| r.bytes().to_vec())
+                });
+                if let (Some(b), Some(f)) = (bytes, history.as_ref()) {
+                    if let Some(d) = f.parent() {
+                        let _ = std::fs::create_dir_all(d);
                     }
-                }
-                if !live {
-                    break;
+                    let _ = std::fs::write(f, b);
                 }
             }
-        })?;
-    }
-    let folder = dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| dir.to_string_lossy().into_owned());
-    Ok(Session { owner, writer, master: pair.master, child, shared, alive, folder, frames: Some(frames).filter(|f| !f.is_empty()), status: Status::Idle, shown_title: String::new() })
+            if !live {
+                break;
+            }
+        }
+    });
 }
 
 /// How a program is named in its tab.
@@ -497,6 +751,10 @@ pub fn pump(host: isize) {
                 Out::Bytes(b) => posts.push(serde_json::json!({"t": "out", "d": rf_pulse::term::base64(&b)}).to_string()),
                 Out::Exit => posts.push(r#"{"t":"exit"}"#.into()),
             }
+        }
+        // (no pulse line over a terminal that was already running: its screen is not our card)
+        if sh.reattached {
+            s.frames = None;
         }
         if sh.card_seen {
             if let Some(frames) = s.frames.take() {
@@ -556,5 +814,11 @@ mod tests {
         assert!(u.contains("&s="));
         let key = u.rsplit("&s=").next().unwrap();
         assert!(key.bytes().all(|b| b.is_ascii_hexdigit()));
+        // a kept terminal opened again as a tab: the same key, read back from its address
+        assert_eq!(key_of(&u).as_deref(), Some(key));
+        let again = url_for_key(d, key);
+        assert_eq!(key_of(&again).as_deref(), Some(key));
+        assert_eq!(dir_of(&again).as_deref(), Some(d));
+        assert!(key_of("https://example.com/?s=abc").is_none());
     }
 }

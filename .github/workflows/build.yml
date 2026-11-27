@@ -40,6 +40,8 @@ jobs:
           key: check
       # the logic shared with the Mac (clipboard, scripts, notes, disk, agents, the terminal's welcome card)
       - run: cargo test --manifest-path apps/files/Cargo.toml -p rf-pulse
+      # the terminal session host: a terminal outlives its viewer (the app crashing), is attached again, ends when closed
+      - run: cargo test --manifest-path apps/files/Cargo.toml -p rf-termhost
       # compile errors in the file manager in minutes, before the full installer build below
       - run: cargo check --manifest-path apps/files/Cargo.toml -p rf-app --bins
 
