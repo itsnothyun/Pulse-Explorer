@@ -161,6 +161,7 @@
       "filetype-icons/*.ico": "filetype-icons/",
       "../../files/target/release/rustyfiles.exe": "files/rustyfiles.exe",
       "../../files/target/release/directlook.exe": "files/directlook.exe",
+      "../../files/target/release/pulse-termhost.exe": "files/pulse-termhost.exe",
       "../../files/target/release/rustyfiles-shellguard.exe": "files/rustyfiles-shellguard.exe",
       "../../files/target/release/rustyfiles_dialog.dll": "files/rustyfiles_dialog.dll",
       "../../files/LICENSE": "files/LICENSE"

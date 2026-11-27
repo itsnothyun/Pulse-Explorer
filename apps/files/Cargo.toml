@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/rf-core", "crates/rf-pulse", "crates/rf-win", "crates/rf-app", "crates/rf-nearby", "crates/rf-archive", "crates/rf-dialog", "crates/rf-shellguard", "crates/rf-player", "crates/rustdecoder", "tools/gpustress"]
+members = ["crates/rf-core", "crates/rf-pulse", "crates/rf-termhost", "crates/rf-win", "crates/rf-app", "crates/rf-nearby", "crates/rf-archive", "crates/rf-dialog", "crates/rf-shellguard", "crates/rf-player", "crates/rustdecoder", "tools/gpustress"]
 # The macOS app (Swift in macos/, its Rust bridge in crates/rf-mac) is built on the Mac only, as a workspace of its own.
 exclude = ["crates/rf-mac", "macos"]
 
@@ -14,6 +14,7 @@ publish = false
 rf-core = { path = "crates/rf-core" }
 rf-win = { path = "crates/rf-win" }
 rf-pulse = { path = "crates/rf-pulse" }
+rf-termhost = { path = "crates/rf-termhost" }
 rf-player = { path = "crates/rf-player" }
 rf-nearby = { path = "crates/rf-nearby" }
 rustdecoder = { path = "crates/rustdecoder" }

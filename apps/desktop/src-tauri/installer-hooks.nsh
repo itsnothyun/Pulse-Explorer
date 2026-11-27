@@ -1,5 +1,11 @@
 ; Registers Pulse Explorer in Explorer's "Open with" menu and in Settings > Default apps.
 ; Generated from tauri.conf.json fileAssociations; Tauri's own installer writes the ProgIDs.
+; The terminal session host (pulse-termhost.exe, rf-termhost) keeps terminals running after the app closes; a running copy
+; would keep its file locked, so an update or an uninstall stops it first (its terminals end: as with any update).
+!macro NSIS_HOOK_PREINSTALL
+  nsExec::Exec 'taskkill /F /IM pulse-termhost.exe'
+!macroend
+
 !macro NSIS_HOOK_POSTINSTALL
   WriteRegStr HKCU "Software\PulseExplorer\Capabilities" "ApplicationName" "Pulse Explorer"
   WriteRegStr HKCU "Software\PulseExplorer\Capabilities" "ApplicationDescription" "Universal local-first file viewer"
@@ -151,6 +157,7 @@
 !macroend
 
 !macro NSIS_HOOK_PREUNINSTALL
+  nsExec::Exec 'taskkill /F /IM pulse-termhost.exe'
   DeleteRegValue HKCU "Software\Classes\.pdf\OpenWithProgids" "PDF Document"
   DeleteRegValue HKCU "Software\Classes\.docx\OpenWithProgids" "Document"
   DeleteRegValue HKCU "Software\Classes\.doc\OpenWithProgids" "Document"

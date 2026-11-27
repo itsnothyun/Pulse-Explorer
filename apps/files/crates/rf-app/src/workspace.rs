@@ -402,6 +402,21 @@ fn panes_to_restore(panes: &[crate::settings::SessionPane], tabs: usize) -> Vec<
 
 /// What tells that the session has to be written again: the places of all panes (not which pane has the focus: a click from one
 /// pane to the other is not worth a write of the settings file; the focus is written when the places change and at exit).
+/// A tab the user closed: its terminals end with it (`terminal::end`). A window closing, the app quitting or crashing keep
+/// them running in the terminal host; they come back as tabs.
+fn end_terminals(tab: &Tab, cx: &App) {
+    for v in std::iter::once(&tab.left).chain(tab.right.as_ref()) {
+        end_terminal_of(v, cx);
+    }
+}
+
+fn end_terminal_of(view: &Entity<FolderView>, cx: &App) {
+    let v = view.read(cx);
+    if matches!(v.location(), Location::Web { url } if crate::terminal::is_terminal(url)) {
+        crate::terminal::end(v.web_id());
+    }
+}
+
 /// What the tab strip shows for a tab: the name it was given (an agent's working / waiting mark still in front), else its own.
 fn tab_title(name: Option<&str>, own: String) -> String {
     match name {
@@ -923,7 +938,36 @@ impl Workspace {
         // tab and sliding the "+" in (seen frame by frame, 2026-11-16: the folder is listed in the first picture, the tab strip moves
         // for 280 ms more), and the speed test, which waits for the picture to stand still, counted that as "not open yet".
         this.tab_anim = None;
+        this.adopt_terminals(window, cx);
         this
+    }
+
+    /// Terminals the terminal host kept running (the app quit or crashed) that no tab shows: opened as tabs, once, in the first
+    /// window. Claude Code and the other agents in them are where they were.
+    fn adopt_terminals(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        static DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if self.picker.is_some() || DONE.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
+        let shown: Vec<String> = self
+            .tabs
+            .iter()
+            .flat_map(|t| std::iter::once(&t.left).chain(t.right.as_ref()))
+            .filter_map(|v| match v.read(cx).location() {
+                Location::Web { url } => crate::terminal::key_of(url),
+                _ => None,
+            })
+            .collect();
+        let task = cx.background_executor().spawn(async move { crate::terminal::orphans(&shown) });
+        cx.spawn_in(window, async move |this, cx| {
+            let found = task.await;
+            let _ = this.update_in(cx, |ws, window, cx| {
+                for (key, dir) in found {
+                    ws.open_tab(Location::Web { url: crate::terminal::url_for_key(&dir, &key) }, window, cx);
+                }
+            });
+        })
+        .detach();
     }
 
     /// Open/Save dialog window: its answer, filter and session (see `picker`).
@@ -1292,6 +1336,7 @@ impl Workspace {
             return;
         }
         let tab = self.tabs.remove(ix);
+        end_terminals(&tab, cx);
         self.closed.push(tab.view().read(cx).location().clone());
         let next = if self.active > ix || self.active >= self.tabs.len() {
             self.active.saturating_sub(1)
@@ -1318,6 +1363,7 @@ impl Workspace {
         }
         for i in (0..old).rev() {
             let tab = self.tabs.remove(i);
+            end_terminals(&tab, cx);
             self.closed.push(tab.view().read(cx).location().clone());
         }
         self.tab_scrolled_to = None;
@@ -1332,6 +1378,7 @@ impl Workspace {
         for i in (0..self.tabs.len()).rev() {
             if i != keep {
                 let tab = self.tabs.remove(i);
+                end_terminals(&tab, cx);
                 self.closed.push(tab.view().read(cx).location().clone());
             }
         }
@@ -1516,6 +1563,7 @@ impl Workspace {
         // (the new tab is the last one)
         for i in (0..old.min(self.tabs.len().saturating_sub(1))).rev() {
             let tab = self.tabs.remove(i);
+            end_terminals(&tab, cx);
             self.closed.push(tab.view().read(cx).location().clone());
         }
         self.tab_scrolled_to = None;
@@ -1526,6 +1574,7 @@ impl Workspace {
         let range: Vec<usize> = if right { (ix + 1..self.tabs.len()).collect() } else { (0..ix).collect() };
         for i in range.into_iter().rev() {
             let tab = self.tabs.remove(i);
+            end_terminals(&tab, cx);
             self.closed.push(tab.view().read(cx).location().clone());
         }
         let ix = if right { ix } else { 0 };
@@ -1985,6 +2034,13 @@ impl Workspace {
 
     /// Closes the focused pane of a split tab; the other one stays.
     fn close_active_pane(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // the pane that goes: its terminal ends with it
+        {
+            let t = &self.tabs[self.active];
+            let Some(right) = t.right.as_ref() else { return };
+            let gone = if t.right_active { right } else { &t.left };
+            end_terminal_of(gone, cx);
+        }
         let t = &mut self.tabs[self.active];
         let Some(right) = t.right.take() else { return };
         if !t.right_active {
